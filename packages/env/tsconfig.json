@@ -1,0 +1,3 @@
+{
+  "extends": "@oratoria-backend/config/tsconfig.base.json"
+}

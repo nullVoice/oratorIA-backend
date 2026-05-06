@@ -1,0 +1,49 @@
+# Docker Compose for oratoria-backend
+# Full-stack container orchestration
+
+name: oratoria-backend
+
+services:
+  server:
+    build:
+      context: ./apps/server
+      dockerfile: Dockerfile
+    container_name: oratoria-backend-server
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://postgres:password@db:5432/oratoria-backend
+    restart: unless-stopped
+    depends_on:
+      - db
+    networks:
+      - oratoria-backend-network
+
+  db:
+    image: postgres:16-alpine
+    container_name: oratoria-backend-postgres
+    environment:
+      POSTGRES_DB: oratoria-backend
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - oratoria-backend_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - oratoria-backend-network
+
+networks:
+  oratoria-backend-network:
+    driver: bridge
+
+volumes:
+  oratoria-backend_postgres_data:
