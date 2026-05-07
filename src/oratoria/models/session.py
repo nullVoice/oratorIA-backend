@@ -43,11 +43,19 @@ class Session(Base):
         index=True,
     )
     type: Mapped[SessionType] = mapped_column(
-        Enum(SessionType, name="session_type"),
+        Enum(
+            SessionType,
+            name="session_type",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
         nullable=False,
     )
     status: Mapped[SessionStatus] = mapped_column(
-        Enum(SessionStatus, name="session_status"),
+        Enum(
+            SessionStatus,
+            name="session_status",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
         nullable=False,
         default=SessionStatus.CREATED,
         index=True,

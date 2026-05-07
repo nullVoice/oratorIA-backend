@@ -39,12 +39,20 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     locale: Mapped[str] = mapped_column(String(10), default="es", nullable=False)
     plan: Mapped[UserPlan] = mapped_column(
-        Enum(UserPlan, name="user_plan"),
+        Enum(
+            UserPlan,
+            name="user_plan",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
         default=UserPlan.FREE,
         nullable=False,
     )
     segment: Mapped[UserSegment | None] = mapped_column(
-        Enum(UserSegment, name="user_segment"),
+        Enum(
+            UserSegment,
+            name="user_segment",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
         nullable=True,
     )
 

@@ -30,6 +30,11 @@ class SubscriptionStatus(str, enum.Enum):
     UNPAID = "unpaid"
 
 
+class SubscriptionProvider(str, enum.Enum):
+    STRIPE = "stripe"
+    CULQI = "culqi"
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
 
@@ -41,13 +46,28 @@ class Subscription(Base):
         index=True,
     )
     status: Mapped[SubscriptionStatus] = mapped_column(
-        Enum(SubscriptionStatus, name="subscription_status"),
+        Enum(
+            SubscriptionStatus,
+            name="subscription_status",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
         default=SubscriptionStatus.TRIALING,
         nullable=False,
     )
-    provider: Mapped[str] = mapped_column(String(32), default="stripe", nullable=False)
+    provider: Mapped[SubscriptionProvider] = mapped_column(
+        Enum(
+            SubscriptionProvider,
+            name="subscription_provider",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
+        default=SubscriptionProvider.STRIPE,
+        nullable=False,
+    )
     provider_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    current_period_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     current_period_end: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
