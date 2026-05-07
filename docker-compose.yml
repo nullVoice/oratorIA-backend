@@ -1,49 +1,86 @@
-# Docker Compose for oratoria-backend
-# Full-stack container orchestration
-
-name: oratoria-backend
-
 services:
-  server:
-    build:
-      context: ./apps/server
-      dockerfile: Dockerfile
-    container_name: oratoria-backend-server
-    ports:
-      - "3001:3000"
+  postgres:
+    image: pgvector/pgvector:pg16
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - DATABASE_URL=postgresql://postgres:password@db:5432/oratoria-backend
-    restart: unless-stopped
-    depends_on:
-      - db
-    networks:
-      - oratoria-backend-network
-
-  db:
-    image: postgres:16-alpine
-    container_name: oratoria-backend-postgres
-    environment:
-      POSTGRES_DB: oratoria-backend
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_USER: oratoria
+      POSTGRES_PASSWORD: oratoria
+      POSTGRES_DB: oratoria
     ports:
       - "5432:5432"
     volumes:
-      - oratoria-backend_postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U oratoria -d oratoria"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - oratoria-backend-network
+      retries: 10
 
-networks:
-  oratoria-backend-network:
-    driver: bridge
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["uvicorn", "src.oratoria.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "src.oratoria.workers.celery_app", "worker", "--loglevel=info"]
+    volumes:
+      - ./src:/app/src
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "src.oratoria.workers.celery_app", "beat", "--loglevel=info"]
+    volumes:
+      - ./src:/app/src
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    command: ["celery", "-A", "src.oratoria.workers.celery_app", "flower", "--port=5555"]
 
 volumes:
-  oratoria-backend_postgres_data:
+  postgres_data:
+  redis_data:

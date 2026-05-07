@@ -1,0 +1,108 @@
+[project]
+name = "oratoria-backend"
+version = "0.1.0"
+description = "OratorIA backend — AI-powered public speaking coaching platform"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+authors = [{ name = "OratorIA Team" }]
+
+dependencies = [
+    # Web framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "gunicorn>=23.0.0",
+    "python-multipart>=0.0.20",
+    "websockets>=14.0",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "pgvector>=0.3.6",
+
+    # Auth
+    "fastapi-users[sqlalchemy]>=14.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+
+    # Cache / queue
+    "redis>=5.2.0",
+    "celery>=5.4.0",
+
+    # Validation / settings
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+
+    # AI / LLM
+    "langchain>=0.3.13",
+    "langchain-anthropic>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "langgraph>=0.2.60",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "anthropic>=0.42.0",
+    "openai>=1.59.0",
+
+    # Audio / paraverbal
+    "elevenlabs>=1.50.0",
+    "pyannote.audio>=3.3.0",
+    "torch>=2.5.0",
+    "torchaudio>=2.5.0",
+    "librosa>=0.10.2",
+    "pydub>=0.25.1",
+    "numpy>=2.0.0",
+
+    # Storage / cloud
+    "boto3>=1.35.0",
+    "aioboto3>=13.3.0",
+
+    # HTTP / utilities
+    "httpx>=0.28.0",
+    "tenacity>=9.0.0",
+    "aiofiles>=24.1.0",
+
+    # Payments
+    "stripe>=11.4.0",
+
+    # Email
+    "resend>=2.5.0",
+
+    # Reports
+    "reportlab>=4.2.5",
+
+    # Observability
+    "structlog>=24.4.0",
+    "sentry-sdk[fastapi]>=2.19.0",
+    "langfuse>=2.57.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.4",
+    "mypy>=1.13.0",
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "httpx>=0.28.0",
+    "factory-boy>=3.3.1",
+    "faker>=33.1.0",
+    "pre-commit>=4.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oratoria"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
