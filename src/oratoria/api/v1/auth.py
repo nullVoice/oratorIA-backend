@@ -1,28 +1,34 @@
-"""Authentication routes (login, refresh, logout, register)."""
+"""Authentication routes — wires the fastapi-users routers.
+
+The four sub-routers are mounted at the same prefix this router
+will be included with (`/api/v1/auth`). Resulting endpoints:
+
+    POST /api/v1/auth/register
+    POST /api/v1/auth/login
+    POST /api/v1/auth/logout
+    POST /api/v1/auth/forgot-password
+    POST /api/v1/auth/reset-password
+    POST /api/v1/auth/request-verify-token
+    POST /api/v1/auth/verify
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
+
+from oratoria.core.security import auth_backend, fastapi_users
+from oratoria.schemas.user import UserCreate, UserRead
 
 router = APIRouter()
 
+# POST /register
+router.include_router(fastapi_users.get_register_router(UserRead, UserCreate))
 
-@router.post("/login")
-async def login() -> dict[str, str]:
-    """TODO: wire fastapi-users auth backend."""
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO: implement with fastapi-users")
+# POST /login, POST /logout
+router.include_router(fastapi_users.get_auth_router(auth_backend))
 
+# POST /forgot-password, POST /reset-password
+router.include_router(fastapi_users.get_reset_password_router())
 
-@router.post("/refresh")
-async def refresh() -> dict[str, str]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO")
-
-
-@router.post("/logout")
-async def logout() -> dict[str, str]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO")
-
-
-@router.post("/register")
-async def register() -> dict[str, str]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO")
+# POST /request-verify-token, POST /verify
+router.include_router(fastapi_users.get_verify_router(UserRead))
