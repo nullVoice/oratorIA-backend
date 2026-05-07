@@ -6,9 +6,12 @@ Two endpoints:
   Called repeatedly during a recording with the cumulative audio so far.
   The response is the full transcript Whisper produced for that audio.
 
-- POST /api/v1/practice/finalize          (JSON metrics + transcript → Claude)
+- POST /api/v1/practice/finalize          (JSON metrics + transcript → LLM)
   Called once when the user stops recording. Returns a small structured
   evaluation: score 0-100 + summary + 1 strength + 1 improvement.
+  Uses Claude if `ANTHROPIC_API_KEY` is set, otherwise falls back to
+  GPT-4o via the OpenAI key. This keeps the demo working when the team
+  only has one provider configured.
 
 These endpoints are intentionally stateless. The persisted Session / Report
 flow lives behind /sessions and is wired in Épica 4 proper.
@@ -22,7 +25,9 @@ from textwrap import dedent
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ValidationError
 
 from oratoria.config import settings
@@ -124,15 +129,52 @@ _SYSTEM_PROMPT = dedent("""
 """).strip()
 
 
+def _build_evaluator_llm() -> tuple[BaseChatModel, str]:
+    """Pick whichever LLM we have credentials for.
+
+    Prefers Claude (matches the production-target stack); falls back to
+    GPT-4o so the demo still works when only the OpenAI key is set.
+    Returns the chat model + a human-readable provider label for logs.
+    """
+    if settings.anthropic_api_key and settings.anthropic_api_key.get_secret_value():
+        return (
+            ChatAnthropic(
+                model_name=settings.anthropic_model,
+                temperature=0.3,
+                max_tokens=1024,
+                api_key=settings.anthropic_api_key.get_secret_value(),
+                timeout=45,
+                stop=None,
+            ),
+            f"anthropic:{settings.anthropic_model}",
+        )
+    if settings.openai_api_key and settings.openai_api_key.get_secret_value():
+        return (
+            ChatOpenAI(
+                model=settings.openai_model,
+                temperature=0.3,
+                max_tokens=1024,
+                api_key=settings.openai_api_key.get_secret_value(),
+                timeout=45,
+                # GPT-4o native JSON mode — saves us a fence-stripping pass
+                # and makes parsing much more reliable.
+                model_kwargs={"response_format": {"type": "json_object"}},
+            ),
+            f"openai:{settings.openai_model}",
+        )
+    return None, "none"  # type: ignore[return-value]
+
+
 @router.post("/finalize", response_model=FinalizeResponse)
 async def finalize_practice(
     payload: FinalizePayload,
     user: User = Depends(current_active_user),  # noqa: ARG001 — enforces auth
 ) -> FinalizeResponse:
-    if not settings.anthropic_api_key or not settings.anthropic_api_key.get_secret_value():
+    llm, provider = _build_evaluator_llm()
+    if llm is None:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "ANTHROPIC_API_KEY is not configured on the server.",
+            "Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is configured on the server.",
         )
 
     user_msg = dedent(f"""
@@ -149,21 +191,12 @@ async def finalize_practice(
         Genera el JSON pedido siguiendo EXACTAMENTE la estructura indicada.
     """).strip()
 
-    llm = ChatAnthropic(
-        model_name=settings.anthropic_model,
-        temperature=0.3,
-        max_tokens=1024,
-        api_key=settings.anthropic_api_key.get_secret_value(),
-        timeout=45,
-        stop=None,
-    )
-
     try:
         response = await llm.ainvoke(
             [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=user_msg)]
         )
     except Exception as e:
-        logger.exception("Claude finalize call failed")
+        logger.exception("Finalize call failed via %s", provider)
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             f"AI provider error: {type(e).__name__}",
@@ -171,7 +204,7 @@ async def finalize_practice(
 
     raw = response.content if isinstance(response.content, str) else str(response.content)
     raw = raw.strip()
-    # Strip a fenced ```json ... ``` block if Claude added one despite the instructions.
+    # Strip a fenced ```json ... ``` block if the model added one despite the instructions.
     if raw.startswith("```"):
         raw = raw.strip("`").lstrip("json").strip()
 
@@ -179,7 +212,9 @@ async def finalize_practice(
         data = json.loads(raw)
         return FinalizeResponse.model_validate(data)
     except (json.JSONDecodeError, ValidationError):
-        logger.exception("Failed to parse Claude finalize response: %r", raw[:300])
+        logger.exception(
+            "Failed to parse finalize response from %s: %r", provider, raw[:300]
+        )
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             "AI returned an unparseable response. Please retry.",
