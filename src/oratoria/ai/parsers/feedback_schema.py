@@ -55,7 +55,7 @@ class EvaluationReport(BaseModel):
         description="Top 3 improvement areas, each actionable.",
     )
     paraverbal_metrics: ParaverbalMetrics
-    recommended_next_steps: list[str] = Field(
+    next_steps: list[str] = Field(
         min_length=1,
         max_length=5,
         description="Concrete next exercises or practice goals.",

@@ -73,7 +73,7 @@ async def _generate_report_node(state: OrchestratorState) -> OrchestratorState:
             "strengths": [s.model_dump() for s in evaluation.strengths],
             "improvements": [i.model_dump() for i in evaluation.improvements],
             "paraverbal_metrics": evaluation.paraverbal_metrics.model_dump(),
-            "recommended_next_steps": evaluation.recommended_next_steps,
+            "next_steps": evaluation.next_steps,
         }
     }
 
