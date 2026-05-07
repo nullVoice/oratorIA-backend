@@ -33,12 +33,21 @@ Segmentos: **Educativo**, **Empresarial** y **RRHH**.
 
 ## Requisitos previos
 
-- Python **3.12** (recomendado vía [`uv`](https://docs.astral.sh/uv/))
-- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) >= 0.5
-- Docker + Docker Compose
-- (opcional) `ffmpeg` y `libsndfile` si vas a correr análisis paraverbal localmente fuera de Docker
+Antes de arrancar, asegúrate de tener instalado:
+
+| Tool             | Versión mínima | Cómo instalar (Windows)                       |
+| ---------------- | -------------- | --------------------------------------------- |
+| **Python 3.12**  | 3.12.x         | `winget install Python.Python.3.12`           |
+| **uv** (Astral)  | 0.9+           | https://docs.astral.sh/uv/getting-started/installation/ |
+| **Docker Desktop** | 25+          | https://www.docker.com/products/docker-desktop |
+| **OpenSSL**      | cualquiera     | viene con Git for Windows (Git Bash) o `winget install ShiningLight.OpenSSL.Light` |
+| **Bun**          | 1.3+           | sólo si vas a correr el frontend; ver `oratorIA-frontend/README.md` |
+
+> Tip: el backend pin en `.python-version` es `3.12`. Si `uv` no encuentra una distribución 3.12 local, intentará bajarla de GitHub (`python-build-standalone`). Si tu red bloquea `github.com`, instala Python con `winget` antes de correr `uv sync`.
 
 ## Setup local
+
+Primera vez en una máquina nueva — pegar los bloques en orden:
 
 ```bash
 # 1. Clonar y entrar
@@ -47,30 +56,54 @@ cd oratorIA-backend
 
 # 2. Variables de entorno
 cp .env.example .env
-# editar .env con tus claves
 
-# 3. Instalar dependencias y crear venv
-uv sync
+# Generar secretos reales (en Git Bash o WSL)
+echo "SECRET_KEY=$(openssl rand -hex 32)" >> .env.tmp
+echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env.tmp
+# Mezclar manualmente .env.tmp en .env (sobrescribir SECRET_KEY y JWT_SECRET)
+# y borrar .env.tmp.
 
-# 4. Servicios de infraestructura
+# 3. Pin de Python e instalar deps
+uv python pin 3.12
+# La línea siguiente excluye torch/torchaudio/pyannote.audio porque pesan
+# varios GB; se instalan más adelante (Épica 6 — análisis paraverbal real).
+uv sync \
+    --no-install-package torch \
+    --no-install-package torchaudio \
+    --no-install-package pyannote.audio
+
+# 4. Servicios de infraestructura (postgres + redis)
 docker compose up -d postgres redis
 
-# 5. Migraciones
-uv run alembic upgrade head
+# 5. Habilitar pgvector en Postgres (sólo la primera vez)
+docker compose exec -T postgres psql -U oratoria -d oratoria \
+    -c "CREATE EXTENSION IF NOT EXISTS vector"
 
-# 6. Servidor de desarrollo
-uv run uvicorn src.oratoria.main:app --reload
+# 6. Migraciones (cuando existan — ver Épica 2 del TODO.md)
+# uv run alembic upgrade head
+
+# 7. Servidor de desarrollo
+# Mientras torch no esté instalado, usar --no-sync para que `uv run`
+# no intente bajarlo automáticamente.
+uv run --no-sync uvicorn src.oratoria.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 API disponible en `http://localhost:8000`. Docs en `/docs` (Swagger) y `/redoc`.
+
+### Verificación rápida
+
+```bash
+curl http://localhost:8000/        # {"name":"OratorIA API","version":"0.1.0"}
+curl http://localhost:8000/health  # {"status":"ok"}
+```
 
 ## Comandos útiles
 
 ```bash
 # Desarrollo
-uv run uvicorn src.oratoria.main:app --reload          # API
-uv run celery -A src.oratoria.workers.celery_app worker --loglevel=info
-uv run celery -A src.oratoria.workers.celery_app beat --loglevel=info
+uv run --no-sync uvicorn src.oratoria.main:app --reload          # API
+uv run --no-sync celery -A src.oratoria.workers.celery_app worker --loglevel=info
+uv run --no-sync celery -A src.oratoria.workers.celery_app beat --loglevel=info
 
 # Migraciones
 uv run alembic revision --autogenerate -m "mensaje"
@@ -78,17 +111,19 @@ uv run alembic upgrade head
 uv run alembic downgrade -1
 
 # Tests
-uv run pytest
-uv run pytest --cov=src/oratoria
+uv run --no-sync pytest
+uv run --no-sync pytest --cov=src/oratoria
 
 # Lint / types
-uv run ruff check .
-uv run ruff format .
-uv run mypy src
+uv run --no-sync ruff check .
+uv run --no-sync ruff format .
+uv run --no-sync mypy src
 
 # Stack completo en Docker
 docker compose up --build
 ```
+
+> Una vez instaladas las deps pesadas en Épica 6, el flag `--no-sync` deja de ser necesario.
 
 ## Estructura
 
@@ -112,11 +147,11 @@ src/oratoria/
 
 ## Variables de entorno
 
-Ver [`.env.example`](./.env.example) para la lista completa con descripciones.
+Ver [`.env.example`](./.env.example) para la lista completa con descripciones. Las variables marcadas con `# TODO: agregar` se configuran en la épica que las consume (ver `TODO.md` en la carpeta padre del repo).
 
 ## Frontend
 
-El frontend vive en otro repo y está construido con TanStack Start + Bun + TypeScript.
+El frontend vive en [`oratorIA-frontend`](../oratorIA-frontend/) (otro repo, mismo workspace). Stack: TanStack Start + Bun + TypeScript. Setup en su propio README.
 
 ## Licencia
 
