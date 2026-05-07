@@ -1,4 +1,9 @@
-"""Subscription / billing state model."""
+"""Subscription / billing state model.
+
+The current plan lives on `User.plan` (cached for fast access).
+This table tracks the billing-side state: provider IDs, status,
+period boundaries.
+"""
 
 from __future__ import annotations
 
@@ -25,13 +30,6 @@ class SubscriptionStatus(str, enum.Enum):
     UNPAID = "unpaid"
 
 
-class SubscriptionPlan(str, enum.Enum):
-    FREE = "free"
-    BASIC = "basic"
-    PRO = "pro"
-    ENTERPRISE = "enterprise"
-
-
 class Subscription(Base):
     __tablename__ = "subscriptions"
 
@@ -41,11 +39,6 @@ class Subscription(Base):
         nullable=False,
         unique=True,
         index=True,
-    )
-    plan: Mapped[SubscriptionPlan] = mapped_column(
-        Enum(SubscriptionPlan, name="subscription_plan"),
-        default=SubscriptionPlan.FREE,
-        nullable=False,
     )
     status: Mapped[SubscriptionStatus] = mapped_column(
         Enum(SubscriptionStatus, name="subscription_status"),
