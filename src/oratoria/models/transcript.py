@@ -23,6 +23,7 @@ class Transcript(Base):
         UUID(as_uuid=True),
         ForeignKey("sessions.id", ondelete="CASCADE"),
         nullable=False,
+        unique=True,
         index=True,
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -34,4 +35,4 @@ class Transcript(Base):
     segments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
 
-    session: Mapped["Session"] = relationship(back_populates="transcripts")
+    session: Mapped["Session"] = relationship(back_populates="transcript")

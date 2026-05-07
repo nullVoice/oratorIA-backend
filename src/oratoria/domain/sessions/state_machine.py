@@ -5,7 +5,7 @@ from __future__ import annotations
 from oratoria.models.session import SessionStatus
 
 ALLOWED_TRANSITIONS: dict[SessionStatus, set[SessionStatus]] = {
-    SessionStatus.PENDING: {SessionStatus.IN_PROGRESS, SessionStatus.CANCELED},
+    SessionStatus.CREATED: {SessionStatus.IN_PROGRESS, SessionStatus.CANCELED},
     SessionStatus.IN_PROGRESS: {SessionStatus.PROCESSING, SessionStatus.CANCELED},
     SessionStatus.PROCESSING: {SessionStatus.COMPLETED, SessionStatus.FAILED},
     SessionStatus.COMPLETED: set(),
