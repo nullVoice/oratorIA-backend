@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,11 +83,10 @@ def create_app() -> FastAPI:
     app.include_router(ws_router, prefix="/ws")
 
     @app.get("/", tags=["meta"])
-    async def root() -> dict[str, Any]:
+    async def root() -> dict[str, str]:
         return {
-            "name": "OratorIA Backend",
+            "name": "OratorIA API",
             "version": "0.1.0",
-            "environment": settings.environment,
         }
 
     @app.get("/health", tags=["meta"])
