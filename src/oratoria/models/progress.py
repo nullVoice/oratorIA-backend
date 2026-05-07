@@ -1,12 +1,12 @@
-"""User progress snapshots over time."""
+"""Daily user progress snapshot (time-series, one row per (user, date))."""
 
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from datetime import date as date_
 
-from sqlalchemy import ForeignKey, Integer
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Date, Float, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from oratoria.models.base import Base
@@ -14,6 +14,9 @@ from oratoria.models.base import Base
 
 class Progress(Base):
     __tablename__ = "progress"
+    __table_args__ = (
+        UniqueConstraint("user_id", "date", name="uq_progress_user_date"),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -21,7 +24,8 @@ class Progress(Base):
         nullable=False,
         index=True,
     )
-    period: Mapped[str] = mapped_column(nullable=False)  # e.g. "2026-W18", "2026-05"
+    date: Mapped[date_] = mapped_column(Date, nullable=False, index=True)
     sessions_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    average_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    avg_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_filler_words: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_words_per_minute: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from datetime import date as date_
 
 from pydantic import BaseModel, ConfigDict
 
@@ -13,7 +13,8 @@ class ProgressRead(BaseModel):
 
     id: uuid.UUID
     user_id: uuid.UUID
-    period: str
+    date: date_
     sessions_count: int
-    average_score: int | None
-    metrics: dict[str, Any]
+    avg_score: float | None
+    total_filler_words: int
+    avg_words_per_minute: float | None
