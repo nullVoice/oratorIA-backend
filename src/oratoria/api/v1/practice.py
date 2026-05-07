@@ -1,26 +1,26 @@
-"""Quick-eval practice endpoints — demo flow without session persistence.
-
-Two endpoints:
+"""Practice flow endpoints.
 
 - POST /api/v1/practice/transcribe        (multipart audio → Whisper text)
   Called repeatedly during a recording with the cumulative audio so far.
   The response is the full transcript Whisper produced for that audio.
 
-- POST /api/v1/practice/finalize          (JSON metrics + transcript → LLM)
-  Called once when the user stops recording. Returns a small structured
-  evaluation: score 0-100 + summary + 1 strength + 1 improvement.
-  Uses Claude if `ANTHROPIC_API_KEY` is set, otherwise falls back to
-  GPT-4o via the OpenAI key. This keeps the demo working when the team
-  only has one provider configured.
-
-These endpoints are intentionally stateless. The persisted Session / Report
-flow lives behind /sessions and is wired in Épica 4 proper.
+- POST /api/v1/practice/finalize          (JSON metrics + transcript → LLM
+                                          → persisted Session + Transcript + Report)
+  Called once when the user stops recording. The endpoint:
+    1. Asks Claude (or GPT-4o as fallback) for a structured evaluation
+       (score, summary, one strength, one improvement).
+    2. Persists a Session row (status=COMPLETED), a Transcript row,
+       and a Report row owned by the current user.
+    3. Returns the report JSON plus the new `id` so the frontend can
+       deep-link to /sessions/:id later.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import uuid
+from datetime import datetime, timedelta, timezone
 from textwrap import dedent
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -29,9 +29,13 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession as DBSession
 
 from oratoria.config import settings
 from oratoria.core.security import current_active_user
+from oratoria.dependencies import get_db
+from oratoria.models import Report, Session as SessionModel, Transcript
+from oratoria.models.session import SessionStatus, SessionType
 from oratoria.models.user import User
 from oratoria.services.stt.whisper import WhisperSTT
 
@@ -80,16 +84,32 @@ async def transcribe_audio(
 # ---------------------------------- Finalize ----------------------------------
 
 
+class FillerWordCount(BaseModel):
+    word: str
+    count: int
+
+
 class FinalizePayload(BaseModel):
     transcript: str = Field(min_length=1)
     duration_seconds: float = Field(ge=0)
     filler_words_count: int = Field(ge=0)
+    filler_by_word: list[FillerWordCount] = Field(default_factory=list)
     words_per_minute: float = Field(ge=0)
     presentation_type: str = "presentación general"
     audience: str = "audiencia mixta"
 
 
 class FinalizeResponse(BaseModel):
+    id: uuid.UUID
+    score: int = Field(ge=0, le=100)
+    summary: str
+    strength_title: str
+    strength_text: str
+    improvement_title: str
+    improvement_text: str
+
+
+class _LlmEvaluation(BaseModel):
     score: int = Field(ge=0, le=100)
     summary: str
     strength_title: str
@@ -129,13 +149,8 @@ _SYSTEM_PROMPT = dedent("""
 """).strip()
 
 
-def _build_evaluator_llm() -> tuple[BaseChatModel, str]:
-    """Pick whichever LLM we have credentials for.
-
-    Prefers Claude (matches the production-target stack); falls back to
-    GPT-4o so the demo still works when only the OpenAI key is set.
-    Returns the chat model + a human-readable provider label for logs.
-    """
+def _build_evaluator_llm() -> tuple[BaseChatModel | None, str]:
+    """Prefer Claude; fall back to GPT-4o; return (None, "none") otherwise."""
     if settings.anthropic_api_key and settings.anthropic_api_key.get_secret_value():
         return (
             ChatAnthropic(
@@ -156,19 +171,18 @@ def _build_evaluator_llm() -> tuple[BaseChatModel, str]:
                 max_tokens=1024,
                 api_key=settings.openai_api_key.get_secret_value(),
                 timeout=45,
-                # GPT-4o native JSON mode — saves us a fence-stripping pass
-                # and makes parsing much more reliable.
                 model_kwargs={"response_format": {"type": "json_object"}},
             ),
             f"openai:{settings.openai_model}",
         )
-    return None, "none"  # type: ignore[return-value]
+    return None, "none"
 
 
 @router.post("/finalize", response_model=FinalizeResponse)
 async def finalize_practice(
     payload: FinalizePayload,
-    user: User = Depends(current_active_user),  # noqa: ARG001 — enforces auth
+    user: User = Depends(current_active_user),
+    db: DBSession = Depends(get_db),
 ) -> FinalizeResponse:
     llm, provider = _build_evaluator_llm()
     if llm is None:
@@ -204,13 +218,11 @@ async def finalize_practice(
 
     raw = response.content if isinstance(response.content, str) else str(response.content)
     raw = raw.strip()
-    # Strip a fenced ```json ... ``` block if the model added one despite the instructions.
     if raw.startswith("```"):
         raw = raw.strip("`").lstrip("json").strip()
 
     try:
-        data = json.loads(raw)
-        return FinalizeResponse.model_validate(data)
+        evaluation = _LlmEvaluation.model_validate(json.loads(raw))
     except (json.JSONDecodeError, ValidationError):
         logger.exception(
             "Failed to parse finalize response from %s: %r", provider, raw[:300]
@@ -219,3 +231,69 @@ async def finalize_practice(
             status.HTTP_502_BAD_GATEWAY,
             "AI returned an unparseable response. Please retry.",
         )
+
+    # Persist the session, transcript, and report so the dashboard /sessions
+    # endpoints can surface them later.
+    now = datetime.now(timezone.utc)
+    started_at = now - timedelta(seconds=max(payload.duration_seconds, 1))
+
+    session = SessionModel(
+        user_id=user.id,
+        type=SessionType.LIVE,
+        status=SessionStatus.COMPLETED,
+        context={
+            "presentation_type": payload.presentation_type,
+            "audience": payload.audience,
+        },
+        started_at=started_at,
+        ended_at=now,
+        duration_seconds=int(round(payload.duration_seconds)),
+    )
+    db.add(session)
+    await db.flush()
+
+    db.add(
+        Transcript(
+            session_id=session.id,
+            text=payload.transcript,
+            language="es",
+        )
+    )
+
+    db.add(
+        Report(
+            session_id=session.id,
+            score=evaluation.score,
+            strengths=[
+                {
+                    "title": evaluation.strength_title,
+                    "text": evaluation.strength_text,
+                }
+            ],
+            improvements=[
+                {
+                    "title": evaluation.improvement_title,
+                    "text": evaluation.improvement_text,
+                }
+            ],
+            paraverbal_metrics={
+                "words_per_minute": payload.words_per_minute,
+                "filler_words_count": payload.filler_words_count,
+                "filler_by_word": [f.model_dump() for f in payload.filler_by_word],
+                "duration_seconds": payload.duration_seconds,
+            },
+            summary=evaluation.summary,
+            next_steps=[],
+        )
+    )
+    await db.commit()
+
+    return FinalizeResponse(
+        id=session.id,
+        score=evaluation.score,
+        summary=evaluation.summary,
+        strength_title=evaluation.strength_title,
+        strength_text=evaluation.strength_text,
+        improvement_title=evaluation.improvement_title,
+        improvement_text=evaluation.improvement_text,
+    )

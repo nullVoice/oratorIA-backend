@@ -1,51 +1,124 @@
-"""Session endpoints — create, list, get, upload audio, finish, delete."""
+"""Session listing + detail endpoints.
+
+The persistence side-effects of `POST /api/v1/practice/finalize` populate
+the `sessions` / `transcripts` / `reports` tables; this module just reads
+them back for the dashboard and the report deep-link.
+"""
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
+from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession as DBSession
+from sqlalchemy.orm import selectinload
 
-from oratoria.dependencies import DbSession
-from oratoria.schemas.session import SessionCreate, SessionRead
+from oratoria.core.security import current_active_user
+from oratoria.dependencies import get_db
+from oratoria.models import Session as SessionModel
+from oratoria.models.user import User
 
 router = APIRouter()
 
 
-@router.post("", response_model=SessionRead, status_code=status.HTTP_201_CREATED)
-async def create_session(payload: SessionCreate, db: DbSession) -> SessionRead:  # noqa: ARG001
-    """Create a new practice session."""
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO: implement in domain.sessions.service")
+class SessionSummary(BaseModel):
+    id: uuid.UUID
+    type: str
+    status: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    duration_seconds: int | None
+    score: int | None
+    summary: str | None
+    created_at: datetime
 
 
-@router.get("", response_model=list[SessionRead])
-async def list_sessions(db: DbSession) -> list[SessionRead]:  # noqa: ARG001
-    """List sessions for the current user."""
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO: implement in domain.sessions.service")
+class SessionDetail(BaseModel):
+    id: uuid.UUID
+    type: str
+    status: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    duration_seconds: int | None
+    context: dict[str, Any]
+    transcript: str | None
+    report: dict[str, Any] | None
+    created_at: datetime
 
 
-@router.get("/{session_id}", response_model=SessionRead)
-async def get_session(session_id: uuid.UUID, db: DbSession) -> SessionRead:  # noqa: ARG001
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO: implement in domain.sessions.service")
+@router.get("", response_model=list[SessionSummary])
+async def list_sessions(
+    user: User = Depends(current_active_user),
+    db: DBSession = Depends(get_db),
+) -> list[SessionSummary]:
+    stmt = (
+        select(SessionModel)
+        .where(SessionModel.user_id == user.id)
+        .order_by(desc(SessionModel.created_at))
+        .options(selectinload(SessionModel.report))
+        .limit(100)
+    )
+    sessions = (await db.execute(stmt)).scalars().all()
+    return [
+        SessionSummary(
+            id=s.id,
+            type=s.type.value,
+            status=s.status.value,
+            started_at=s.started_at,
+            ended_at=s.ended_at,
+            duration_seconds=s.duration_seconds,
+            score=s.report.score if s.report else None,
+            summary=s.report.summary if s.report else None,
+            created_at=s.created_at,
+        )
+        for s in sessions
+    ]
 
 
-@router.post("/{session_id}/audio", status_code=status.HTTP_202_ACCEPTED)
-async def upload_audio(
+@router.get("/{session_id}", response_model=SessionDetail)
+async def get_session(
     session_id: uuid.UUID,
-    db: DbSession,  # noqa: ARG001
-    file: UploadFile = File(...),
-) -> dict[str, str]:
-    """Upload an audio chunk for an async session — enqueues processing."""
-    if file.content_type and not file.content_type.startswith("audio/"):
-        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Audio file required.")
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO: enqueue Celery task")
-
-
-@router.post("/{session_id}/finish", response_model=SessionRead)
-async def finish_session(session_id: uuid.UUID, db: DbSession) -> SessionRead:  # noqa: ARG001
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO: implement in domain.sessions.service")
-
-
-@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_session(session_id: uuid.UUID, db: DbSession) -> None:  # noqa: ARG001
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO: implement in domain.sessions.service")
+    user: User = Depends(current_active_user),
+    db: DBSession = Depends(get_db),
+) -> SessionDetail:
+    stmt = (
+        select(SessionModel)
+        .where(
+            SessionModel.id == session_id,
+            SessionModel.user_id == user.id,
+        )
+        .options(
+            selectinload(SessionModel.report),
+            selectinload(SessionModel.transcript),
+        )
+    )
+    sess = (await db.execute(stmt)).scalar_one_or_none()
+    if not sess:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found.")
+    return SessionDetail(
+        id=sess.id,
+        type=sess.type.value,
+        status=sess.status.value,
+        started_at=sess.started_at,
+        ended_at=sess.ended_at,
+        duration_seconds=sess.duration_seconds,
+        context=sess.context or {},
+        transcript=sess.transcript.text if sess.transcript else None,
+        report=(
+            {
+                "score": sess.report.score,
+                "summary": sess.report.summary,
+                "strengths": sess.report.strengths,
+                "improvements": sess.report.improvements,
+                "paraverbal_metrics": sess.report.paraverbal_metrics,
+                "next_steps": sess.report.next_steps,
+            }
+            if sess.report
+            else None
+        ),
+        created_at=sess.created_at,
+    )
