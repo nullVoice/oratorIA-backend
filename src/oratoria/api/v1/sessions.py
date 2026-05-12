@@ -71,6 +71,7 @@ class SessionSummary(BaseModel):
     duration_seconds: int | None
     score: int | None
     summary: str | None
+    context: dict[str, Any]
     created_at: datetime
 
 
@@ -284,6 +285,7 @@ async def list_sessions(
             duration_seconds=s.duration_seconds,
             score=s.report.score if s.report else None,
             summary=s.report.summary if s.report else None,
+            context=s.context or {},
             created_at=s.created_at,
         )
         for s in sessions
