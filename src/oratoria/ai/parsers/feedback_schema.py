@@ -12,6 +12,7 @@ Dimension = Literal["verbal", "paraverbal", "strategic"]
 
 class Strength(BaseModel):
     title: str = Field(description="Short label for the strength.")
+    description: str = Field(description="One- or two-sentence explanation of the strength.")
     dimension: Dimension = Field(description="Dimension this strength applies to.")
     evidence: str = Field(description="Concrete excerpt or moment that supports this strength.")
     impact: str = Field(description="Why this matters for the audience or goal.")
@@ -19,6 +20,7 @@ class Strength(BaseModel):
 
 class Improvement(BaseModel):
     title: str = Field(description="Short label for the area to improve.")
+    description: str = Field(description="One- or two-sentence explanation of the issue.")
     dimension: Dimension = Field(description="Dimension this improvement applies to.")
     evidence: str = Field(description="Concrete excerpt or moment that exposes the issue.")
     suggestion: str = Field(description="Actionable, specific recommendation.")
