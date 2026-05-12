@@ -20,9 +20,43 @@ from sqlalchemy.orm import selectinload
 from oratoria.core.security import current_active_user
 from oratoria.dependencies import get_db
 from oratoria.models import Session as SessionModel
+from oratoria.models.session import SessionType
 from oratoria.models.user import User
+from oratoria.schemas.session import SessionCreate, SessionRead
 
 router = APIRouter()
+
+
+@router.post(
+    "",
+    response_model=SessionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_session(
+    payload: SessionCreate,
+    user: User = Depends(current_active_user),
+    db: DBSession = Depends(get_db),
+) -> SessionRead:
+    sess = SessionModel(
+        user_id=user.id,
+        type=SessionType(payload.type),
+        context=payload.context,
+    )
+    db.add(sess)
+    await db.commit()
+    await db.refresh(sess)
+    return SessionRead(
+        id=sess.id,
+        user_id=sess.user_id,
+        type=sess.type.value,
+        status=sess.status.value,
+        title=None,
+        context=sess.context or {},
+        started_at=sess.started_at,
+        ended_at=sess.ended_at,
+        created_at=sess.created_at,
+        updated_at=sess.updated_at,
+    )
 
 
 class SessionSummary(BaseModel):

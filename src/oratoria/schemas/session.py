@@ -22,7 +22,7 @@ class SessionRead(BaseModel):
     user_id: uuid.UUID
     type: str
     status: str
-    title: str | None
+    title: str | None = None
     context: dict[str, Any]
     started_at: datetime | None
     ended_at: datetime | None
