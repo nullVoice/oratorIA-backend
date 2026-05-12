@@ -19,6 +19,7 @@ class TranscriptionSegment:
 class TranscriptionResult:
     text: str
     language: str = "es"
+    duration_seconds: float = 0.0
     segments: list[TranscriptionSegment] = field(default_factory=list)
     raw: dict[str, Any] | None = None
 

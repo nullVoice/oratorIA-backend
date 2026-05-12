@@ -52,6 +52,7 @@ class WhisperSTT(BaseSTT):
         return TranscriptionResult(
             text=raw.get("text", "").strip(),
             language=raw.get("language", language),
+            duration_seconds=float(raw.get("duration", 0.0) or 0.0),
             segments=segments,
             raw=raw,
         )
