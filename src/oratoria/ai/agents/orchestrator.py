@@ -16,9 +16,10 @@ if TYPE_CHECKING:
 class SessionContext(TypedDict, total=False):
     presentation_type: str
     audience: str
-    goal: str
+    objective: str
     formality: str
-    language: str
+    duration_target: int
+    language: str  # only used to hint STT
 
 
 class OrchestratorState(TypedDict, total=False):
@@ -54,12 +55,8 @@ async def _evaluate_node(state: OrchestratorState) -> OrchestratorState:
     ctx: SessionContext = state.get("context", {})
     evaluation = await agent.evaluate(
         transcript=state["transcript"],
+        context=dict(ctx),
         paraverbal_metrics=state["paraverbal_metrics"],
-        presentation_type=ctx.get("presentation_type", "presentación general"),
-        audience=ctx.get("audience", "audiencia mixta"),
-        goal=ctx.get("goal", "comunicar con claridad y persuadir"),
-        formality=ctx.get("formality", "profesional"),
-        language=ctx.get("language", "es"),
     )
     return {"evaluation": evaluation}
 
