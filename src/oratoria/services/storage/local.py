@@ -41,6 +41,10 @@ class LocalStorage(BaseStorage):
     async def get_url(self, key: str, expires_in: int = 3600) -> str:
         return self._path(key).resolve().as_uri()
 
+    async def download(self, key: str) -> bytes:
+        async with aiofiles.open(self._path(key), "rb") as f:
+            return await f.read()
+
     async def delete(self, key: str) -> None:
         try:
             await aiofiles.os.remove(self._path(key))

@@ -59,6 +59,13 @@ class R2Storage(BaseStorage):
                 ExpiresIn=expires_in,
             )
 
+    async def download(self, key: str) -> bytes:
+        async with self._client() as s3:
+            obj = await s3.get_object(Bucket=self._bucket, Key=key)
+            body = obj["Body"]
+            data: bytes = await body.read()
+            return data
+
     async def delete(self, key: str) -> None:
         async with self._client() as s3:
             await s3.delete_object(Bucket=self._bucket, Key=key)

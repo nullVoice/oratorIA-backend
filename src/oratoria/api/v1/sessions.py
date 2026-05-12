@@ -1,14 +1,10 @@
-"""Session listing + detail endpoints.
-
-The persistence side-effects of `POST /api/v1/practice/finalize` populate
-the `sessions` / `transcripts` / `reports` tables; this module just reads
-them back for the dashboard and the report deep-link.
-"""
+"""Session CRUD + audio upload + evaluate pipeline endpoints."""
 
 from __future__ import annotations
 
+import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
@@ -17,13 +13,19 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession as DBSession
 from sqlalchemy.orm import selectinload
 
+from oratoria.ai.agents.evaluator import EvaluatorAgent
 from oratoria.core.security import current_active_user
 from oratoria.dependencies import get_db
-from oratoria.models import Session as SessionModel
+from oratoria.models import Report, Session as SessionModel, Transcript
 from oratoria.models.session import SessionStatus, SessionType
 from oratoria.models.user import User
+from oratoria.schemas.report import ReportRead
 from oratoria.schemas.session import SessionCreate, SessionRead
+from oratoria.services.paraverbal.analyzer import ParaverbalAnalyzer
 from oratoria.services.storage import get_storage
+from oratoria.services.stt.whisper import WhisperSTT
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -110,6 +112,7 @@ async def upload_session_audio(
     url = await storage.upload(key, data, content_type)
 
     sess.audio_url = url
+    sess.context = {**(sess.context or {}), "audio_storage_key": key}
     sess.status = SessionStatus.IN_PROGRESS
     await db.commit()
     await db.refresh(sess)
@@ -126,6 +129,115 @@ async def upload_session_audio(
         created_at=sess.created_at,
         updated_at=sess.updated_at,
     )
+
+
+@router.post("/{session_id}/evaluate", response_model=ReportRead)
+async def evaluate_session(
+    session_id: uuid.UUID,
+    user: User = Depends(current_active_user),
+    db: DBSession = Depends(get_db),
+) -> ReportRead:
+    sess = await db.get(SessionModel, session_id)
+    if sess is None or sess.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found.")
+    if not sess.audio_url:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Session has no audio. Upload audio before evaluating.",
+        )
+    audio_key = (sess.context or {}).get("audio_storage_key")
+    if not audio_key:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Audio storage key missing. Re-upload audio.",
+        )
+
+    sess.status = SessionStatus.PROCESSING
+    await db.commit()
+
+    try:
+        storage = get_storage()
+        audio_bytes = await storage.download(audio_key)
+
+        stt = WhisperSTT()
+        stt_result = await stt.transcribe(audio_bytes, language="es")
+
+        analyzer = ParaverbalAnalyzer()
+        metrics = await analyzer.analyze(audio_bytes, transcript=stt_result.text)
+
+        agent = EvaluatorAgent()
+        evaluation = await agent.evaluate(
+            transcript=stt_result.text,
+            context=sess.context or {},
+            paraverbal_metrics=metrics,
+        )
+
+        # Replace any prior transcript/report from a previous evaluate attempt.
+        await _delete_existing_transcript_and_report(db, sess.id)
+
+        db.add(
+            Transcript(
+                session_id=sess.id,
+                text=stt_result.text,
+                language=stt_result.language,
+                segments=[
+                    {"start": s.start, "end": s.end, "text": s.text}
+                    for s in stt_result.segments
+                ],
+            )
+        )
+
+        report_row = Report(
+            session_id=sess.id,
+            score=evaluation.score,
+            summary=evaluation.summary,
+            strengths=[s.model_dump() for s in evaluation.strengths],
+            improvements=[i.model_dump() for i in evaluation.improvements],
+            paraverbal_metrics=evaluation.paraverbal_metrics.model_dump(),
+            next_steps=evaluation.next_steps,
+        )
+        db.add(report_row)
+
+        sess.status = SessionStatus.COMPLETED
+        sess.ended_at = datetime.now(timezone.utc)
+        if stt_result.duration_seconds:
+            sess.duration_seconds = int(round(stt_result.duration_seconds))
+
+        await db.commit()
+        await db.refresh(report_row)
+        return ReportRead.model_validate(report_row)
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Evaluate session %s failed", session_id)
+        sess.status = SessionStatus.FAILED
+        try:
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            await db.rollback()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Evaluation pipeline failed: {type(exc).__name__}: {exc}",
+        ) from exc
+
+
+async def _delete_existing_transcript_and_report(
+    db: DBSession, session_id: uuid.UUID
+) -> None:
+    existing_t = (
+        await db.execute(
+            select(Transcript).where(Transcript.session_id == session_id)
+        )
+    ).scalar_one_or_none()
+    if existing_t:
+        await db.delete(existing_t)
+    existing_r = (
+        await db.execute(select(Report).where(Report.session_id == session_id))
+    ).scalar_one_or_none()
+    if existing_r:
+        await db.delete(existing_r)
+    await db.flush()
 
 
 @router.get("", response_model=list[SessionSummary])
