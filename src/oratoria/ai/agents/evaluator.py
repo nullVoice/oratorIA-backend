@@ -7,7 +7,7 @@ from typing import Any
 
 from langchain_core.output_parsers import PydanticOutputParser
 
-from oratoria.ai.llm.claude import build_claude
+from oratoria.ai.llm.factory import get_evaluator_llm
 from oratoria.ai.parsers.feedback_schema import EvaluationReport, ParaverbalMetrics
 from oratoria.ai.prompts.evaluator_prompt_v1 import build_evaluator_prompt
 
@@ -33,7 +33,10 @@ class EvaluatorAgent:
         self._prompt = build_evaluator_prompt().partial(
             format_instructions=self._parser.get_format_instructions()
         )
-        self._llm = build_claude(temperature=temperature, max_tokens=max_tokens)
+        # Prefer Claude; fall back to GPT-4o if Anthropic key is missing.
+        self._llm = get_evaluator_llm(
+            temperature=temperature, max_tokens=max_tokens
+        )
         if model:
             self._llm.model_name = model  # type: ignore[attr-defined]
         self._chain = self._prompt | self._llm | self._parser
