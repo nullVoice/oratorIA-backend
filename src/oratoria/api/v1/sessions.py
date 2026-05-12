@@ -7,9 +7,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession as DBSession
 from sqlalchemy.orm import selectinload
 
@@ -72,6 +72,13 @@ class SessionSummary(BaseModel):
     score: int | None
     summary: str | None
     created_at: datetime
+
+
+class SessionListResponse(BaseModel):
+    items: list[SessionSummary]
+    total: int
+    page: int
+    page_size: int
 
 
 class SessionDetail(BaseModel):
@@ -240,20 +247,34 @@ async def _delete_existing_transcript_and_report(
     await db.flush()
 
 
-@router.get("", response_model=list[SessionSummary])
+@router.get("", response_model=SessionListResponse)
 async def list_sessions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     user: User = Depends(current_active_user),
     db: DBSession = Depends(get_db),
-) -> list[SessionSummary]:
+) -> SessionListResponse:
+    base_where = SessionModel.user_id == user.id
+
+    total = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(SessionModel).where(base_where)
+            )
+        ).scalar_one()
+    )
+
+    offset = (page - 1) * page_size
     stmt = (
         select(SessionModel)
-        .where(SessionModel.user_id == user.id)
+        .where(base_where)
         .order_by(desc(SessionModel.created_at))
         .options(selectinload(SessionModel.report))
-        .limit(100)
+        .offset(offset)
+        .limit(page_size)
     )
     sessions = (await db.execute(stmt)).scalars().all()
-    return [
+    items = [
         SessionSummary(
             id=s.id,
             type=s.type.value,
@@ -267,6 +288,9 @@ async def list_sessions(
         )
         for s in sessions
     ]
+    return SessionListResponse(
+        items=items, total=total, page=page, page_size=page_size
+    )
 
 
 @router.get("/{session_id}", response_model=SessionDetail)
