@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession as DBSession
@@ -20,9 +20,10 @@ from sqlalchemy.orm import selectinload
 from oratoria.core.security import current_active_user
 from oratoria.dependencies import get_db
 from oratoria.models import Session as SessionModel
-from oratoria.models.session import SessionType
+from oratoria.models.session import SessionStatus, SessionType
 from oratoria.models.user import User
 from oratoria.schemas.session import SessionCreate, SessionRead
+from oratoria.services.storage import get_storage
 
 router = APIRouter()
 
@@ -82,6 +83,49 @@ class SessionDetail(BaseModel):
     transcript: str | None
     report: dict[str, Any] | None
     created_at: datetime
+
+
+@router.post("/{session_id}/audio", response_model=SessionRead)
+async def upload_session_audio(
+    session_id: uuid.UUID,
+    audio: UploadFile,
+    user: User = Depends(current_active_user),
+    db: DBSession = Depends(get_db),
+) -> SessionRead:
+    sess = await db.get(SessionModel, session_id)
+    if sess is None or sess.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found.")
+
+    data = await audio.read()
+    if not data:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Empty audio payload."
+        )
+
+    content_type = audio.content_type or "audio/mpeg"
+    extension = (audio.filename or "").rsplit(".", 1)[-1].lower() or "mp3"
+    key = f"audio/{session_id}.{extension}"
+
+    storage = get_storage()
+    url = await storage.upload(key, data, content_type)
+
+    sess.audio_url = url
+    sess.status = SessionStatus.IN_PROGRESS
+    await db.commit()
+    await db.refresh(sess)
+
+    return SessionRead(
+        id=sess.id,
+        user_id=sess.user_id,
+        type=sess.type.value,
+        status=sess.status.value,
+        title=None,
+        context=sess.context or {},
+        started_at=sess.started_at,
+        ended_at=sess.ended_at,
+        created_at=sess.created_at,
+        updated_at=sess.updated_at,
+    )
 
 
 @router.get("", response_model=list[SessionSummary])
