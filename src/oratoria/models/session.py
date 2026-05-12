@@ -14,6 +14,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from oratoria.models.base import Base
 
 if TYPE_CHECKING:
+    from oratoria.models.avatar_conversation import AvatarConversation
     from oratoria.models.report import Report
     from oratoria.models.transcript import Transcript
     from oratoria.models.user import User
@@ -76,6 +77,11 @@ class Session(Base):
     report: Mapped["Report | None"] = relationship(
         back_populates="session",
         uselist=False,
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    avatar_conversations: Mapped[list["AvatarConversation"]] = relationship(
+        back_populates="session",
         cascade="all, delete-orphan",
         lazy="selectin",
     )

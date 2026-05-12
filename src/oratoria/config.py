@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str | None = None
     elevenlabs_model: str = "eleven_multilingual_v2"
 
+    # Tavus CVI (avatar audience)
+    tavus_api_key: SecretStr | None = None
+    tavus_persona_id: str | None = None
+    tavus_replica_id: str | None = None
+    tavus_api_base_url: str = "https://tavusapi.com/v2"
+    tavus_webhook_secret: SecretStr | None = None
+    tavus_max_call_duration_seconds: int = 900  # 15 min per session
+    tavus_callback_base_url: str | None = None  # e.g. https://api.oratoria.app
+
     # Cloudflare R2
     r2_account_id: str | None = None
     r2_access_key_id: SecretStr | None = None
