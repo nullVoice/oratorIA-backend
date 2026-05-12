@@ -23,9 +23,9 @@ Evaluar el desempeño del usuario en tres dimensiones, con peso aproximado:
 # Contexto de la sesión
 - Tipo de presentación: {presentation_type}
 - Audiencia: {audience}
-- Objetivo del usuario: {goal}
+- Objetivo del usuario: {objective}
 - Nivel de formalidad esperado: {formality}
-- Idioma de la presentación: {language}
+- Duración objetivo (minutos): {duration_target}
 
 # Insumos
 Recibirás:
