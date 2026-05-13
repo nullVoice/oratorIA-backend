@@ -103,6 +103,15 @@ async def tavus_webhook(
                     len(transcript),
                 )
 
+        if _is_perception_event(event_type):
+            perception = _extract_perception(payload)
+            if perception:
+                convo.perception_analysis = perception
+                logger.info(
+                    "stored perception_analysis for conversation %s",
+                    conversation_id,
+                )
+
         if _is_end_event(event_type):
             if convo.status != AvatarConversationStatus.ENDED:
                 convo.status = AvatarConversationStatus.ENDED
@@ -158,6 +167,11 @@ def _is_transcript_event(event_type: str) -> bool:
     return any(k in t for k in ("transcription_ready", "transcript"))
 
 
+def _is_perception_event(event_type: str) -> bool:
+    t = event_type.lower()
+    return "perception_analysis" in t or "perception.analysis" in t
+
+
 def _is_end_event(event_type: str) -> bool:
     t = event_type.lower()
     return any(
@@ -170,6 +184,28 @@ def _is_end_event(event_type: str) -> bool:
             "ended",
         )
     )
+
+
+def _extract_perception(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Pick out the perception analysis payload regardless of envelope.
+
+    Tavus' application.perception_analysis webhook puts the summary under
+    `properties.analysis` (or just `analysis`). We store everything we
+    receive — let the consumer (EvaluatorAgent prompt) pick the relevant
+    fields.
+    """
+    candidates = [
+        payload.get("perception_analysis"),
+        (payload.get("data") or {}).get("perception_analysis"),
+        payload.get("properties"),
+        payload.get("analysis"),
+    ]
+    for c in candidates:
+        if isinstance(c, dict) and c:
+            return c
+        if isinstance(c, str) and c.strip():
+            return {"analysis": c}
+    return None
 
 
 def _extract_transcript(payload: dict[str, Any]) -> list[dict[str, Any]]:

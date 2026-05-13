@@ -58,6 +58,15 @@ class AvatarStartRequest(BaseModel):
     interactive: bool = False
 
 
+class AvatarEndRequest(BaseModel):
+    """Body for /avatar-end. The frontend ships the Daily app-message stream
+    captured from the Tavus Interactions Protocol — utterances with Raven-1
+    analyses, started/stopped speaking events, etc.
+    """
+
+    events: list[dict[str, Any]] = []
+
+
 class AvatarStartResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -215,6 +224,7 @@ async def avatar_start(
 @router.post("/{session_id}/avatar-end", response_model=AvatarEndResponse)
 async def avatar_end(
     session_id: uuid.UUID,
+    payload: AvatarEndRequest | None = None,
     user: User = Depends(current_active_user),
     db: DBSession = Depends(get_db),
 ) -> AvatarEndResponse:
@@ -254,6 +264,31 @@ async def avatar_end(
         convo_row.duration_seconds = int(
             (convo_row.ended_at - convo_row.started_at).total_seconds()
         )
+
+    # Persist Daily app-message stream coming from the client. We dedup
+    # vs whatever the webhook may have already written.
+    if payload and payload.events:
+        existing_events = convo_row.events or []
+        seen_seqs = {
+            e.get("seq") for e in existing_events if isinstance(e.get("seq"), int)
+        }
+        new_events = [
+            e for e in payload.events
+            if not (isinstance(e.get("seq"), int) and e.get("seq") in seen_seqs)
+        ]
+        convo_row.events = existing_events + new_events
+        logger.info(
+            "stored %d client events for conversation %s (total %d)",
+            len(new_events),
+            convo_row.provider_conversation_id,
+            len(convo_row.events),
+        )
+
+        # Derive a transcript from the events if the webhook hasn't fired.
+        if not convo_row.transcript:
+            derived = _transcript_from_events(convo_row.events)
+            if derived:
+                convo_row.transcript = derived
 
     # If the webhook hasn't delivered a transcript yet (common in local dev
     # where the backend isn't publicly reachable), poll Tavus directly for
@@ -298,6 +333,95 @@ async def avatar_end(
         status=convo_row.status.value,
         report_ready=report_ready,
     )
+
+
+def _build_perception_data(convo: AvatarConversation) -> str:
+    """Compose a string the EvaluatorAgent prompt can read.
+
+    Two sources:
+      1. Per-utterance Raven-1 analyses inside `events` (user turns only —
+         that's what we want to grade).
+      2. The final `perception_analysis` summary from the webhook.
+    """
+    chunks: list[str] = []
+
+    if convo.events:
+        turn_lines: list[str] = []
+        for ev in convo.events:
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("event_type") != "conversation.utterance":
+                continue
+            props = ev.get("properties") or {}
+            role = str(props.get("role") or props.get("speaker") or "").lower()
+            if role and role not in {"user", "participant", "human"}:
+                continue
+            visual = props.get("user_visual_analysis")
+            audio = props.get("user_audio_analysis")
+            if not (isinstance(visual, str) or isinstance(audio, str)):
+                continue
+            line_parts: list[str] = []
+            if isinstance(visual, str) and visual.strip():
+                line_parts.append(f"visual: {visual.strip()}")
+            if isinstance(audio, str) and audio.strip():
+                line_parts.append(f"audio: {audio.strip()}")
+            if line_parts:
+                turn_lines.append("- " + "; ".join(line_parts))
+        if turn_lines:
+            chunks.append(
+                "### Observaciones por turno (Raven-1)\n" + "\n".join(turn_lines)
+            )
+
+    if convo.perception_analysis:
+        try:
+            chunks.append(
+                "### Resumen perceptual final\n"
+                + json.dumps(
+                    convo.perception_analysis, ensure_ascii=False, indent=2
+                )
+            )
+        except (TypeError, ValueError):
+            chunks.append("### Resumen perceptual final\n" + str(convo.perception_analysis))
+
+    if not chunks:
+        return "No hay datos perceptuales disponibles para esta sesión."
+
+    return "\n\n".join(chunks)
+
+
+def _transcript_from_events(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build a [{role, content, visual, audio}] list from app-message events.
+
+    Tavus emits one `conversation.utterance` per turn with the role and
+    content under `properties.role` / `properties.speech`. When Raven-1 is
+    active and the speaker is the user, `properties.user_visual_analysis`
+    and `properties.user_audio_analysis` are also there.
+    """
+    out: list[dict[str, Any]] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("event_type") != "conversation.utterance":
+            continue
+        props = ev.get("properties") or {}
+        role = props.get("role") or props.get("speaker") or "user"
+        content = (
+            props.get("speech")
+            or props.get("content")
+            or props.get("text")
+            or ""
+        )
+        if not isinstance(content, str) or not content.strip():
+            continue
+        item: dict[str, Any] = {"role": str(role), "content": content.strip()}
+        for key in ("user_visual_analysis", "user_audio_analysis"):
+            v = props.get(key)
+            if isinstance(v, str) and v.strip():
+                item[key] = v.strip()
+        out.append(item)
+    return out
 
 
 async def _poll_tavus_transcript(
@@ -463,11 +587,15 @@ async def _evaluate_avatar_session(
             "variación tonal no están disponibles."
         ),
     )
+
+    perception_data = _build_perception_data(convo)
+
     agent = EvaluatorAgent()
     evaluation = await agent.evaluate(
         transcript=transcript_text,
         context=sess.context or {},
         paraverbal_metrics=metrics,
+        perception_data=perception_data,
     )
 
     db.add(

@@ -32,6 +32,9 @@ Recibirás:
 - La transcripción literal (con timestamps cuando estén disponibles).
 - Métricas paraverbales calculadas: words_per_minute, filler_words_count, pause_ratio, \
   tone_variance.
+- En sesiones con avatar (Tavus + Raven-1) recibirás también un **análisis perceptual** \
+  con observaciones visuales y de audio recogidas en tiempo real (postura, contacto \
+  visual, expresividad, nerviosismo, ritmo) por turno, y un resumen final perception_analysis.
 - Eventualmente metadatos de audiencia y objetivo.
 
 # Reglas de evaluación
@@ -66,7 +69,13 @@ recomendación genérica a romper la estructura.
 
 
 def build_evaluator_prompt() -> ChatPromptTemplate:
-    """Build the chat prompt template used by the evaluator agent."""
+    """Build the chat prompt template used by the evaluator agent.
+
+    `perception_data` is an optional block. When the session ran through the
+    Tavus avatar pipeline with Raven-1, we fill it with the per-utterance
+    visual/audio analyses plus the final perception_analysis summary. For
+    the simple-recording flow it should be the empty string.
+    """
     return ChatPromptTemplate.from_messages(
         [
             ("system", EVALUATOR_SYSTEM_PROMPT),
@@ -74,6 +83,7 @@ def build_evaluator_prompt() -> ChatPromptTemplate:
                 "human",
                 "## Transcripción\n{transcript}\n\n"
                 "## Métricas paraverbales\n{paraverbal_metrics}\n\n"
+                "## Análisis perceptual (Raven-1)\n{perception_data}\n\n"
                 "Genera el reporte siguiendo estrictamente el schema JSON.",
             ),
         ]

@@ -55,6 +55,16 @@ class AvatarConversation(Base):
     transcript: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB, nullable=True
     )
+    # Raven-1 perception summary (from webhook application.perception_analysis).
+    perception_analysis: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    # Streaming events captured from the Daily data channel
+    # (conversation.utterance, started/stopped_speaking, etc) — each with
+    # user_visual_analysis / user_audio_analysis when Raven-1 is on.
+    events: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False

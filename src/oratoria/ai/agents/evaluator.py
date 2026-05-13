@@ -46,6 +46,8 @@ class EvaluatorAgent:
         transcript: str,
         context: dict[str, Any],
         paraverbal_metrics: ParaverbalMetrics | dict[str, Any],
+        *,
+        perception_data: str | None = None,
     ) -> EvaluationReport:
         metrics_payload = (
             paraverbal_metrics.model_dump_json(indent=2)
@@ -57,6 +59,10 @@ class EvaluatorAgent:
             {
                 "transcript": transcript,
                 "paraverbal_metrics": metrics_payload,
+                "perception_data": (
+                    perception_data
+                    or "Sin análisis perceptual (modalidad sin avatar)."
+                ),
                 "presentation_type": ctx["presentation_type"],
                 "audience": ctx["audience"],
                 "objective": ctx["objective"],
