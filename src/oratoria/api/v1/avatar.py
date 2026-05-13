@@ -255,8 +255,18 @@ async def avatar_end(
             (convo_row.ended_at - convo_row.started_at).total_seconds()
         )
 
-    # If the webhook already populated the transcript, run the evaluator now
-    # so the user can navigate to the report immediately.
+    # If the webhook hasn't delivered a transcript yet (common in local dev
+    # where the backend isn't publicly reachable), poll Tavus directly for
+    # a short window. Webhook + polling are belt-and-suspenders.
+    if not convo_row.transcript:
+        transcript = await _poll_tavus_transcript(
+            convo_row.provider_conversation_id, max_attempts=8, delay=2.0
+        )
+        if transcript:
+            convo_row.transcript = transcript
+
+    # If we have a transcript (from webhook or polling) run the evaluator
+    # so the frontend can navigate to the report immediately.
     report_ready = False
     if convo_row.transcript:
         try:
@@ -267,6 +277,20 @@ async def avatar_end(
                 "EvaluatorAgent failed for session %s after avatar end", sess.id
             )
 
+    # Fallback: Tavus exposes transcripts only via webhook. If we couldn't
+    # reach it (no public TAVUS_CALLBACK_BASE_URL, e.g. running on
+    # localhost), the polling above will time out. Produce a placeholder
+    # Report so the frontend doesn't hang forever and the user sees a
+    # clear message instead.
+    if not report_ready:
+        try:
+            await _create_placeholder_avatar_report(db, sess)
+            report_ready = True
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "could not create placeholder report for session %s", sess.id
+            )
+
     await db.commit()
 
     return AvatarEndResponse(
@@ -274,6 +298,135 @@ async def avatar_end(
         status=convo_row.status.value,
         report_ready=report_ready,
     )
+
+
+async def _poll_tavus_transcript(
+    conversation_id: str, *, max_attempts: int, delay: float
+) -> list[dict[str, Any]] | None:
+    """Poll Tavus' GET /conversations/{id} until a transcript appears.
+
+    Tavus exposes the transcript on the conversation object once the call
+    has fully wound down. This is the fallback for local dev where the
+    webhook isn't reachable.
+    """
+    import asyncio
+
+    avatar = get_avatar_service()
+    for attempt in range(max_attempts):
+        await asyncio.sleep(delay if attempt else 1.5)
+        try:
+            convo = await avatar.get_conversation(conversation_id)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "polling Tavus conversation %s failed (attempt %d)",
+                conversation_id,
+                attempt,
+            )
+            continue
+
+        events: list[dict[str, Any]] = []
+        raw_events = convo.raw.get("events") if convo.raw else None
+        if isinstance(raw_events, list):
+            for ev in raw_events:
+                if not isinstance(ev, dict):
+                    continue
+                # Tavus puts the user transcript in
+                # events[*].properties.transcript as text, or as a list.
+                props = ev.get("properties") or {}
+                t = props.get("transcript")
+                if isinstance(t, list) and t:
+                    events.extend(x for x in t if isinstance(x, dict))
+                elif isinstance(t, str) and t.strip():
+                    events.append({"role": "user", "content": t.strip()})
+        if not events and convo.raw:
+            # Some payloads expose `transcript` at the top level.
+            top = convo.raw.get("transcript")
+            if isinstance(top, list):
+                events.extend(x for x in top if isinstance(x, dict))
+            elif isinstance(top, str) and top.strip():
+                events.append({"role": "user", "content": top.strip()})
+
+        if events:
+            logger.info(
+                "polled %d transcript items for conversation %s",
+                len(events),
+                conversation_id,
+            )
+            return events
+
+    logger.warning(
+        "Tavus transcript not available after %d attempts for conversation %s",
+        max_attempts,
+        conversation_id,
+    )
+    return None
+
+
+_PLACEHOLDER_SUMMARY = (
+    "No pudimos obtener el transcript de tu sesión con el avatar. Tavus "
+    "entrega el transcript exclusivamente por webhook, y este backend no "
+    "es alcanzable desde Tavus en este momento. Para que el modo "
+    "Audiencia Digital genere un reporte completo, expón el backend con "
+    "un túnel HTTPS (cloudflared/ngrok) y configura su URL "
+    "+ /api/v1/webhooks/tavus en el portal de Tavus."
+)
+
+
+async def _create_placeholder_avatar_report(
+    db: DBSession, sess: SessionModel
+) -> None:
+    """Generate a stub Report when Tavus' transcript never arrived.
+
+    Idempotent: skips if a Report already exists for the session.
+    """
+    existing = (
+        await db.execute(select(Report).where(Report.session_id == sess.id))
+    ).scalar_one_or_none()
+    if existing:
+        return
+    db.add(
+        Report(
+            session_id=sess.id,
+            score=0,
+            summary=_PLACEHOLDER_SUMMARY,
+            strengths=[],
+            improvements=[
+                {
+                    "title": "Configurar webhook de Tavus",
+                    "description": (
+                        "Para obtener el transcript del modo Audiencia Digital "
+                        "Tavus necesita poder alcanzar este backend con HTTPS."
+                    ),
+                    "dimension": "strategic",
+                    "evidence": (
+                        "El polling REST a /v2/conversations/<id> no expone el "
+                        "transcript — verificado contra la API en runtime."
+                    ),
+                    "suggestion": (
+                        "Ejecuta `cloudflared tunnel --url http://localhost:8000` "
+                        "(o ngrok), copia la URL HTTPS, ponla en "
+                        "TAVUS_CALLBACK_BASE_URL del .env y configura la misma "
+                        "URL + /api/v1/webhooks/tavus en el dashboard de Tavus."
+                    ),
+                    "priority": "high",
+                }
+            ],
+            paraverbal_metrics={
+                "words_per_minute": 0,
+                "filler_words_count": 0,
+                "pause_ratio": 0,
+                "tone_variance": 0,
+                "notes": "Métricas no disponibles sin transcript del avatar.",
+            },
+            next_steps=[
+                "Configura cloudflared/ngrok para exponer el backend.",
+                "Mientras tanto, usa el modo de práctica simple (no avatar).",
+            ],
+        )
+    )
+    sess.status = SessionStatus.COMPLETED
+    sess.ended_at = datetime.now(timezone.utc)
+    await db.flush()
 
 
 async def _evaluate_avatar_session(
