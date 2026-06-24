@@ -20,7 +20,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock* ./
+# README.md is referenced by pyproject (readme = "README.md"); hatchling needs
+# it when the project itself is built/installed by the second `uv sync`.
+COPY pyproject.toml uv.lock* README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev || uv sync --no-install-project --no-dev
 
