@@ -114,6 +114,10 @@ class Settings(BaseSettings):
 
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
+    # Regex for origins allowed in addition to cors_origins. Defaults to any
+    # Vercel deployment of the frontend project, so deployment-specific URLs
+    # (e.g. orator-ia-frontend-<hash>.vercel.app) work, not just the alias.
+    cors_origin_regex: str = r"https://orator-ia-frontend-[a-z0-9-]+\.vercel\.app"
 
     @property
     def cors_origins_list(self) -> list[str]:
