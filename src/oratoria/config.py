@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import Field, SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +28,30 @@ class Settings(BaseSettings):
     database_echo: bool = False
     database_pool_size: int = 10
     database_max_overflow: int = 20
+
+    @field_validator("database_url")
+    @classmethod
+    def _force_async_driver(cls, v: str) -> str:
+        """Normalise managed-provider URLs (Neon/Render/Supabase) for asyncpg.
+
+        Coerces `postgres://` / `postgresql://` to the async driver (otherwise
+        SQLAlchemy picks psycopg2, which isn't installed), and rewrites libpq's
+        query params that asyncpg rejects: `sslmode=require` -> `ssl=require`,
+        and drops `channel_binding`.
+        """
+        if v.startswith("postgres://"):
+            v = "postgresql+asyncpg://" + v[len("postgres://") :]
+        elif v.startswith("postgresql://"):
+            v = "postgresql+asyncpg://" + v[len("postgresql://") :]
+        parts = urlsplit(v)
+        if parts.query:
+            kept = [
+                ("ssl", val) if key == "sslmode" else (key, val)
+                for key, val in parse_qsl(parts.query, keep_blank_values=True)
+                if key != "channel_binding"
+            ]
+            v = urlunsplit(parts._replace(query=urlencode(kept)))
+        return v
 
     # Redis / Celery
     redis_url: str = "redis://localhost:6379/0"
