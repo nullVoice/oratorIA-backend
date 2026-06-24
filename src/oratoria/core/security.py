@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import bcrypt
@@ -16,6 +16,8 @@ from fastapi_users.authentication import (
     BearerTransport,
     JWTStrategy,
 )
+from fastapi_users.exceptions import InvalidPasswordException
+from fastapi_users.schemas import BaseUserCreate
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from jose import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,14 +53,14 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # --------------------------------- JWT helpers ------------------------------
 
+
 def create_access_token(
     subject: str,
     expires_delta: timedelta | None = None,
     extra_claims: dict[str, Any] | None = None,
 ) -> str:
-    expire = datetime.now(timezone.utc) + (
-        expires_delta
-        or timedelta(minutes=settings.jwt_access_token_expires_minutes)
+    expire = datetime.now(UTC) + (
+        expires_delta or timedelta(minutes=settings.jwt_access_token_expires_minutes)
     )
     payload: dict[str, Any] = {"sub": subject, "exp": expire}
     if extra_claims:
@@ -80,6 +82,7 @@ def decode_token(token: str) -> dict[str, Any]:
 
 # --------------------------- fastapi-users wiring ---------------------------
 
+
 async def get_user_db(
     session: AsyncSession = Depends(get_db),
 ) -> AsyncGenerator[SQLAlchemyUserDatabase, None]:
@@ -97,6 +100,27 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     reset_password_token_secret = settings.jwt_secret.get_secret_value()
     verification_token_secret = settings.jwt_secret.get_secret_value()
 
+    async def validate_password(
+        self,
+        password: str,
+        user: User | BaseUserCreate,
+    ) -> None:
+        """Enforce a minimum password policy at registration and reset.
+
+        fastapi-users calls this before hashing; raising rejects the request
+        with 400 REGISTER_INVALID_PASSWORD and the given reason.
+        """
+        if len(password) < 8:
+            raise InvalidPasswordException(reason="La contraseña debe tener al menos 8 caracteres.")
+        if len(password) > 128:
+            raise InvalidPasswordException(
+                reason="La contraseña es demasiado larga (máximo 128 caracteres)."
+            )
+        email = getattr(user, "email", "") or ""
+        local = email.split("@", 1)[0].lower()
+        if local and len(local) >= 3 and local in password.lower():
+            raise InvalidPasswordException(reason="La contraseña no puede contener tu correo.")
+
     async def on_after_register(self, user: User, request: Request | None = None) -> None:
         logger.info("user.registered id=%s email=%s", user.id, user.email)
 
@@ -104,7 +128,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         self,
         user: User,
         request: Request | None = None,
-        response: Any | None = None,  # noqa: ARG002
+        response: Any | None = None,
     ) -> None:
         logger.info("user.login id=%s email=%s", user.id, user.email)
 
