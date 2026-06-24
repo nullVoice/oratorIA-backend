@@ -43,12 +43,9 @@ dependencies = [
     "anthropic>=0.42.0",
     "openai>=1.59.0",
 
-    # Audio / paraverbal
+    # Audio / paraverbal (lightweight core; the heavy acoustic stack lives in
+    # the optional `acoustic` extra so the deployed image stays small)
     "elevenlabs>=1.50.0",
-    "pyannote.audio>=3.3.0",
-    "torch>=2.5.0",
-    "torchaudio>=2.5.0",
-    "librosa>=0.10.2",
     "pydub>=0.25.1",
     "numpy>=2.0.0",
 
@@ -74,6 +71,19 @@ dependencies = [
     "structlog>=24.4.0",
     "sentry-sdk[fastapi]>=2.19.0",
     "langfuse>=2.57.0",
+]
+
+[project.optional-dependencies]
+# Heavy acoustic stack (~GBs: torch + pyannote). NOT installed in the default
+# build, so the deployed Docker image stays small enough for free tiers
+# (Render, etc.). The paraverbal analyzer degrades gracefully when it's absent.
+# Install locally when you need fine paraverbal/diarization features:
+#   uv sync --extra acoustic
+acoustic = [
+    "pyannote.audio>=3.3.0",
+    "torch>=2.5.0",
+    "torchaudio>=2.5.0",
+    "librosa>=0.10.2",
 ]
 
 [dependency-groups]

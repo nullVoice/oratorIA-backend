@@ -1,0 +1,57 @@
+# Render Blueprint for the OratorIA backend (free tier).
+# Deploy: Render Dashboard → New → Blueprint → pick this repo.
+# Render builds the Dockerfile, generates the secrets, and asks you to fill the
+# values marked `sync: false` (DB, Redis, CORS, API keys) in the dashboard.
+services:
+  - type: web
+    name: oratoria-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+
+      # Auth secrets — Render generates strong random values.
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Neon Postgres connection string. IMPORTANT: use the async driver and
+      # SSL, e.g.:
+      #   postgresql+asyncpg://USER:PASS@HOST/db?ssl=require
+      - key: DATABASE_URL
+        sync: false
+
+      # Upstash Redis (rediss://...). Only used if Redis-backed features run;
+      # safe to set anyway.
+      - key: REDIS_URL
+        sync: false
+
+      # Comma-separated allowed origins — set to your Vercel URL,
+      # e.g. https://oratoria.vercel.app
+      - key: CORS_ORIGINS
+        sync: false
+
+      # LLM / AI (paid APIs — used by the evaluator, avatar, transcription)
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+
+      # Tavus (Audiencia Digital). TAVUS_CALLBACK_BASE_URL must be this
+      # service's public URL so Tavus can reach /api/v1/webhooks/tavus.
+      - key: TAVUS_API_KEY
+        sync: false
+      - key: TAVUS_PERSONA_ID
+        sync: false
+      - key: TAVUS_REPLICA_ID
+        sync: false
+      - key: TAVUS_CALLBACK_BASE_URL
+        sync: false

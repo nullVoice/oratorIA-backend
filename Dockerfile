@@ -52,4 +52,7 @@ USER oratoria
 
 EXPOSE 8000
 
-CMD ["uvicorn", "src.oratoria.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so $PORT (injected by Render/Railway/etc.; defaults to 8000) is
+# expanded, and DB migrations run before the server starts accepting traffic.
+CMD alembic upgrade head && \
+    uvicorn src.oratoria.main:app --host 0.0.0.0 --port ${PORT:-8000}
