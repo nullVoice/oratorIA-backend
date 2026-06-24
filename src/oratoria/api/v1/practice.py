@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from textwrap import dedent
 
 import httpx
@@ -35,7 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession as DBSession
 from oratoria.config import settings
 from oratoria.core.security import current_active_user
 from oratoria.dependencies import get_db
-from oratoria.models import Report, Session as SessionModel, Transcript
+from oratoria.models import Report, Transcript
+from oratoria.models import Session as SessionModel
 from oratoria.models.session import SessionStatus, SessionType
 from oratoria.models.user import User
 from oratoria.services.stt.whisper import WhisperSTT
@@ -57,7 +58,7 @@ class DeepgramTokenResponse(BaseModel):
 
 @router.post("/deepgram-token", response_model=DeepgramTokenResponse)
 async def get_deepgram_token(
-    user: User = Depends(current_active_user),  # noqa: ARG001 — enforces auth
+    user: User = Depends(current_active_user),
 ) -> DeepgramTokenResponse:
     """Return a Deepgram credential the browser can use to open a streaming WS.
 
@@ -130,22 +131,21 @@ async def get_deepgram_token(
                             token=key_data["key"],
                             expires_in=_DEEPGRAM_GRANT_TTL,
                         )
-                    logger.debug(
-                        "Deepgram temp-key creation returned %s", key_resp.status_code
-                    )
+                    logger.debug("Deepgram temp-key creation returned %s", key_resp.status_code)
         except httpx.HTTPError as exc:
             logger.warning("Deepgram management API request failed: %s", exc)
 
-        # --- Attempt 3: Direct key fallback ---
-        # The current key is usage-only (no grant-token or keys:write scope).
-        # We still expose it only to authenticated users.
-        logger.info(
-            "Deepgram ephemeral token unavailable; returning direct key "
-            "(authenticated endpoint — upgrade key scopes in production)"
+        # No ephemeral token could be minted. We deliberately do NOT fall back to
+        # returning the raw long-lived API key to the browser — that would leak a
+        # production credential to every authenticated client. The Deepgram key
+        # must have `grant-token` or `keys:write` scope in production.
+        logger.error(
+            "Deepgram ephemeral token unavailable and raw-key fallback is "
+            "disabled; grant the API key 'grant-token'/'keys:write' scope."
         )
-        return DeepgramTokenResponse(
-            token=raw_key,
-            expires_in=3600,  # session-level; not truly ephemeral
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Live transcription is temporarily unavailable.",
         )
 
 
@@ -161,7 +161,7 @@ class TranscribeResponse(BaseModel):
 @router.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe_audio(
     file: UploadFile = File(..., description="Audio chunk (webm/ogg/mp3)"),
-    user: User = Depends(current_active_user),  # noqa: ARG001 — enforces auth
+    user: User = Depends(current_active_user),
 ) -> TranscribeResponse:
     if not settings.openai_api_key or not settings.openai_api_key.get_secret_value():
         raise HTTPException(
@@ -175,11 +175,7 @@ async def transcribe_audio(
 
     stt = WhisperSTT()
     result = await stt.transcribe(audio, language="es")
-    duration = (
-        max((s.end for s in result.segments), default=0.0)
-        if result.segments
-        else 0.0
-    )
+    duration = max((s.end for s in result.segments), default=0.0) if result.segments else 0.0
     return TranscribeResponse(
         text=result.text,
         language=result.language,
@@ -330,9 +326,7 @@ async def finalize_practice(
     try:
         evaluation = _LlmEvaluation.model_validate(json.loads(raw))
     except (json.JSONDecodeError, ValidationError):
-        logger.exception(
-            "Failed to parse finalize response from %s: %r", provider, raw[:300]
-        )
+        logger.exception("Failed to parse finalize response from %s: %r", provider, raw[:300])
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             "AI returned an unparseable response. Please retry.",
@@ -340,7 +334,7 @@ async def finalize_practice(
 
     # Persist the session, transcript, and report so the dashboard /sessions
     # endpoints can surface them later.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     started_at = now - timedelta(seconds=max(payload.duration_seconds, 1))
 
     session = SessionModel(

@@ -117,7 +117,9 @@ class Settings(BaseSettings):
     # Regex for origins allowed in addition to cors_origins. Defaults to any
     # Vercel deployment of the frontend project, so deployment-specific URLs
     # (e.g. orator-ia-frontend-<hash>.vercel.app) work, not just the alias.
-    cors_origin_regex: str = r"https://orator-ia-frontend-[a-z0-9-]+\.vercel\.app"
+    # Anchored (^…$) so Starlette's fullmatch can't be tricked by a suffix like
+    # https://orator-ia-frontend-x.vercel.app.evil.com.
+    cors_origin_regex: str = r"^https://orator-ia-frontend-[a-z0-9-]+\.vercel\.app$"
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -126,6 +128,23 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @model_validator(mode="after")
+    def _enforce_strong_secrets_in_prod(self) -> Settings:
+        """Fail fast if auth secrets are weak/default in production.
+
+        Render injects strong generated values, so prod is fine; this guards
+        against an accidental deploy that boots with the public 'change-me'
+        defaults, which would let anyone forge valid JWTs.
+        """
+        if self.environment == "production":
+            for name in ("secret_key", "jwt_secret"):
+                raw = getattr(self, name).get_secret_value()
+                if raw in ("change-me", "change-me-too") or len(raw) < 32:
+                    raise ValueError(
+                        f"{name} must be set to a strong (>=32 char) value in production"
+                    )
+        return self
 
 
 @lru_cache(maxsize=1)

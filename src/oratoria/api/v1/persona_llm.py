@@ -1,4 +1,5 @@
 """OpenAI-compatible LLM endpoint for Tavus persona brain (Audiencia Digital)."""
+
 from __future__ import annotations
 
 import json
@@ -42,8 +43,10 @@ def _verify_token(token: str | None) -> None:
     if secret_setting is None:
         return  # dev mode — no check
     secret = secret_setting.get_secret_value()
-    if not token or token != secret:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or missing X-Oratoria-Persona-Token.")
+    if not token or not hmac.compare_digest(token, secret):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Invalid or missing X-Oratoria-Persona-Token."
+        )
 
 
 async def _resolve_system_prompt(
@@ -93,6 +96,7 @@ async def chat_completions(
     chunk_id = _make_chunk_id()
 
     if body.stream:
+
         async def event_generator():
             async for token in agent.astream_reply(system_prompt=system_prompt, messages=messages):
                 chunk = {
@@ -120,5 +124,11 @@ async def chat_completions(
     return {
         "id": chunk_id,
         "object": "chat.completion",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
     }

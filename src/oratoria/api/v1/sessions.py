@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
@@ -16,7 +16,8 @@ from sqlalchemy.orm import selectinload
 from oratoria.ai.agents.evaluator import EvaluatorAgent
 from oratoria.core.security import current_active_user
 from oratoria.dependencies import get_db
-from oratoria.models import Report, Session as SessionModel, Transcript
+from oratoria.models import Report, Transcript
+from oratoria.models import Session as SessionModel
 from oratoria.models.session import SessionStatus, SessionType
 from oratoria.models.user import User
 from oratoria.schemas.report import ReportRead
@@ -28,6 +29,11 @@ from oratoria.services.stt.whisper import WhisperSTT
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Audio upload guards: cap memory use (the whole blob is read into RAM) and
+# reject non-audio extensions so storage keys can't be abused.
+_MAX_AUDIO_BYTES = 50 * 1024 * 1024  # 50 MB
+_ALLOWED_AUDIO_EXTENSIONS = {"mp3", "webm", "ogg", "wav", "m4a", "opus", "mp4"}
 
 
 @router.post(
@@ -108,12 +114,20 @@ async def upload_session_audio(
 
     data = await audio.read()
     if not data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty audio payload.")
+    if len(data) > _MAX_AUDIO_BYTES:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Empty audio payload."
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"Audio exceeds the {_MAX_AUDIO_BYTES // (1024 * 1024)} MB limit.",
         )
 
-    content_type = audio.content_type or "audio/mpeg"
     extension = (audio.filename or "").rsplit(".", 1)[-1].lower() or "mp3"
+    if extension not in _ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Unsupported audio format '.{extension}'.",
+        )
+    content_type = audio.content_type or "audio/mpeg"
     key = f"audio/{session_id}.{extension}"
 
     storage = get_storage()
@@ -171,9 +185,7 @@ async def evaluate_session(
         stt_result = await stt.transcribe(audio_bytes, language="es")
 
         analyzer = ParaverbalAnalyzer()
-        duration_hint = max(
-            (s.end for s in stt_result.segments), default=0.0
-        )
+        duration_hint = max((s.end for s in stt_result.segments), default=0.0)
         metrics = await analyzer.analyze(
             audio_bytes, transcript=stt_result.text, duration_hint=duration_hint
         )
@@ -194,8 +206,7 @@ async def evaluate_session(
                 text=stt_result.text,
                 language=stt_result.language,
                 segments=[
-                    {"start": s.start, "end": s.end, "text": s.text}
-                    for s in stt_result.segments
+                    {"start": s.start, "end": s.end, "text": s.text} for s in stt_result.segments
                 ],
             )
         )
@@ -212,7 +223,7 @@ async def evaluate_session(
         db.add(report_row)
 
         sess.status = SessionStatus.COMPLETED
-        sess.ended_at = datetime.now(timezone.utc)
+        sess.ended_at = datetime.now(UTC)
         if stt_result.duration_seconds:
             sess.duration_seconds = int(round(stt_result.duration_seconds))
 
@@ -227,21 +238,19 @@ async def evaluate_session(
         sess.status = SessionStatus.FAILED
         try:
             await db.commit()
-        except Exception:  # noqa: BLE001
+        except Exception:
             await db.rollback()
+        # Full detail is already captured by logger.exception above; never leak
+        # internal exception text (paths, DB errors, key fragments) to clients.
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"Evaluation pipeline failed: {type(exc).__name__}: {exc}",
+            "Evaluation pipeline failed. Please try again.",
         ) from exc
 
 
-async def _delete_existing_transcript_and_report(
-    db: DBSession, session_id: uuid.UUID
-) -> None:
+async def _delete_existing_transcript_and_report(db: DBSession, session_id: uuid.UUID) -> None:
     existing_t = (
-        await db.execute(
-            select(Transcript).where(Transcript.session_id == session_id)
-        )
+        await db.execute(select(Transcript).where(Transcript.session_id == session_id))
     ).scalar_one_or_none()
     if existing_t:
         await db.delete(existing_t)
@@ -264,9 +273,7 @@ async def list_sessions(
 
     total = int(
         (
-            await db.execute(
-                select(func.count()).select_from(SessionModel).where(base_where)
-            )
+            await db.execute(select(func.count()).select_from(SessionModel).where(base_where))
         ).scalar_one()
     )
 
@@ -295,9 +302,7 @@ async def list_sessions(
         )
         for s in sessions
     ]
-    return SessionListResponse(
-        items=items, total=total, page=page, page_size=page_size
-    )
+    return SessionListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/{session_id}", response_model=SessionDetail)
