@@ -54,6 +54,11 @@ Recibirás:
 7. Devuelve **exactamente** la cantidad pedida en cada lista (top 3 fortalezas, top \
    3 mejoras, 3–5 próximos pasos). Nunca rellenes con texto vacío.
 8. Toda la salida debe estar en español neutro.
+9. El campo `evidence` debe ser una **cita textual del discurso** o una observación \
+   redactada en español natural. **Nunca** escribas nombres de campos internos como \
+   `words_per_minute`, `tone_variance`, `filler_words_count` o `pause_ratio`; si \
+   necesitas mencionar una métrica, usa su nombre en español (p. ej. "hablaste a 44 \
+   palabras por minuto" o "variación tonal casi nula").
 
 # Formato de salida
 Responde **únicamente** con un objeto JSON que cumpla este schema (sin texto \
