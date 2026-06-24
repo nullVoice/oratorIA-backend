@@ -171,7 +171,12 @@ async def evaluate_session(
         stt_result = await stt.transcribe(audio_bytes, language="es")
 
         analyzer = ParaverbalAnalyzer()
-        metrics = await analyzer.analyze(audio_bytes, transcript=stt_result.text)
+        duration_hint = max(
+            (s.end for s in stt_result.segments), default=0.0
+        )
+        metrics = await analyzer.analyze(
+            audio_bytes, transcript=stt_result.text, duration_hint=duration_hint
+        )
 
         agent = EvaluatorAgent()
         evaluation = await agent.evaluate(

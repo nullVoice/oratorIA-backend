@@ -47,6 +47,7 @@ class Settings(BaseSettings):
 
     # STT / TTS
     whisper_model: str = "whisper-1"
+    deepgram_api_key: SecretStr | None = None
     elevenlabs_api_key: SecretStr | None = None
     elevenlabs_voice_id: str | None = None
     elevenlabs_model: str = "eleven_multilingual_v2"
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
     tavus_webhook_secret: SecretStr | None = None
     tavus_max_call_duration_seconds: int = 900  # 15 min per session
     tavus_callback_base_url: str | None = None  # e.g. https://api.oratoria.app
+    persona_llm_secret: SecretStr | None = None  # shared secret for Tavus→persona LLM calls
 
     # Cloudflare R2
     r2_account_id: str | None = None

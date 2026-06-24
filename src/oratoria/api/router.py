@@ -8,6 +8,7 @@ from oratoria.api.v1 import (
     auth,
     avatar,
     billing,
+    persona_llm,
     practice,
     progress,
     reports,
@@ -26,3 +27,4 @@ api_router.include_router(reports.router, prefix="/v1/reports", tags=["reports"]
 api_router.include_router(progress.router, prefix="/v1/progress", tags=["progress"])
 api_router.include_router(billing.router, prefix="/v1/billing", tags=["billing"])
 api_router.include_router(webhooks.router, prefix="/v1/webhooks", tags=["webhooks"])
+api_router.include_router(persona_llm.router, prefix="/v1", tags=["persona-llm"])

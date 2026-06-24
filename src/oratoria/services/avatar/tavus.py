@@ -69,6 +69,7 @@ class TavusService:
         callback_url: str | None = None,
         max_call_duration_seconds: int = 900,
         language: str = "spanish",
+        session_id: str | None = None,
     ) -> AvatarConversation:
         body: dict[str, Any] = {
             "persona_id": persona_id,
@@ -87,6 +88,14 @@ class TavusService:
             body["custom_greeting"] = custom_greeting
         if callback_url:
             body["callback_url"] = callback_url
+        # NOTE: Tavus' POST /conversations does NOT accept a `layers` field — that
+        # config (incl. custom/BYO LLM) lives on the Persona, not the conversation
+        # (see tavus_docs.md §12). The per-session brief is delivered to the
+        # avatar via `conversational_context` above, so the persona's
+        # Tavus-hosted LLM (recommended for low-latency coaching) is brief-aware
+        # without a BYO endpoint. The `session_id` param is retained for callers
+        # but no longer injected here.
+        _ = session_id
 
         async with self._client() as client:
             response = await client.post("/conversations", json=body)

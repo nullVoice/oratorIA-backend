@@ -15,15 +15,17 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession as DBSession
 
 from oratoria.ai.agents.evaluator import EvaluatorAgent
+from oratoria.ai.parsers.feedback_schema import ParaverbalMetrics
 from oratoria.ai.prompts.audience_prompt import (
     build_audience_context,
     build_custom_greeting,
@@ -35,12 +37,13 @@ from oratoria.models import (
     AvatarConversation,
     AvatarConversationStatus,
     Report,
-    Session as SessionModel,
     Transcript,
+)
+from oratoria.models import (
+    Session as SessionModel,
 )
 from oratoria.models.session import SessionStatus, SessionType
 from oratoria.models.user import User
-from oratoria.ai.parsers.feedback_schema import ParaverbalMetrics
 from oratoria.services.avatar import get_avatar_service
 from oratoria.services.paraverbal.filler_words import (
     count_fillers,
@@ -88,11 +91,7 @@ class AvatarEndResponse(BaseModel):
 
 
 def _require_tavus_configured() -> tuple[str, str]:
-    if not (
-        settings.tavus_api_key
-        and settings.tavus_persona_id
-        and settings.tavus_replica_id
-    ):
+    if not (settings.tavus_api_key and settings.tavus_persona_id and settings.tavus_replica_id):
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "El modo Audiencia Digital no está disponible (Tavus no configurado).",
@@ -182,12 +181,35 @@ async def avatar_start(
             callback_url=_callback_url(),
             max_call_duration_seconds=settings.tavus_max_call_duration_seconds,
             language="spanish",
+            session_id=str(session_id),
         )
-    except Exception as exc:  # noqa: BLE001 — bubble a clear 503 to the client
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        logger.warning("Tavus create_conversation failed: %s %s", code, exc.response.text[:200])
+        if code == 402:
+            # Tavus: "out of conversational credits"
+            raise HTTPException(
+                status.HTTP_402_PAYMENT_REQUIRED,
+                "El modo Audiencia Digital se quedó sin créditos por ahora. "
+                "Probá con la Práctica simple mientras tanto.",
+            ) from exc
+        if code == 429:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Hay demasiadas sesiones de avatar en curso. Esperá unos "
+                "segundos y volvé a intentar.",
+            ) from exc
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "No pudimos iniciar la audiencia digital en este momento. "
+            "Volvé a intentar en un ratito o usá la Práctica simple.",
+        ) from exc
+    except Exception as exc:
         logger.exception("Tavus create_conversation failed")
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            f"No pudimos iniciar la conversación con el avatar: {type(exc).__name__}",
+            "No pudimos iniciar la audiencia digital en este momento. "
+            "Volvé a intentar en un ratito o usá la Práctica simple.",
         ) from exc
 
     row = AvatarConversation(
@@ -252,14 +274,14 @@ async def avatar_end(
     avatar = get_avatar_service()
     try:
         await avatar.end_conversation(convo_row.provider_conversation_id)
-    except Exception:  # noqa: BLE001 — already-ended is fine; we still close locally
+    except Exception:
         logger.warning(
             "Failed to end Tavus conversation %s; closing locally",
             convo_row.provider_conversation_id,
         )
 
     convo_row.status = AvatarConversationStatus.ENDED
-    convo_row.ended_at = datetime.now(timezone.utc)
+    convo_row.ended_at = datetime.now(UTC)
     if convo_row.started_at and convo_row.ended_at:
         convo_row.duration_seconds = int(
             (convo_row.ended_at - convo_row.started_at).total_seconds()
@@ -269,11 +291,10 @@ async def avatar_end(
     # vs whatever the webhook may have already written.
     if payload and payload.events:
         existing_events = convo_row.events or []
-        seen_seqs = {
-            e.get("seq") for e in existing_events if isinstance(e.get("seq"), int)
-        }
+        seen_seqs = {e.get("seq") for e in existing_events if isinstance(e.get("seq"), int)}
         new_events = [
-            e for e in payload.events
+            e
+            for e in payload.events
             if not (isinstance(e.get("seq"), int) and e.get("seq") in seen_seqs)
         ]
         convo_row.events = existing_events + new_events
@@ -307,24 +328,26 @@ async def avatar_end(
         try:
             await _evaluate_avatar_session(db, sess, convo_row)
             report_ready = True
-        except Exception:  # noqa: BLE001 — don't block the end-call response
-            logger.exception(
-                "EvaluatorAgent failed for session %s after avatar end", sess.id
-            )
+        except Exception:
+            logger.exception("EvaluatorAgent failed for session %s after avatar end", sess.id)
 
     # Fallback: Tavus exposes transcripts only via webhook. If we couldn't
     # reach it (no public TAVUS_CALLBACK_BASE_URL, e.g. running on
     # localhost), the polling above will time out. Produce a placeholder
     # Report so the frontend doesn't hang forever and the user sees a
     # clear message instead.
-    if not report_ready:
+    # Only fall back to a placeholder when there is genuinely no way for the
+    # webhook to reach us (no public callback URL). When a callback IS
+    # configured, the Tavus transcription_ready webhook will arrive shortly and
+    # produce the real report; the frontend polls GET /sessions/:id meanwhile.
+    # Creating a placeholder here would otherwise force the user onto a useless
+    # score-0 report before the real one lands.
+    if not report_ready and _callback_url() is None:
         try:
             await _create_placeholder_avatar_report(db, sess)
             report_ready = True
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "could not create placeholder report for session %s", sess.id
-            )
+        except Exception:
+            logger.exception("could not create placeholder report for session %s", sess.id)
 
     await db.commit()
 
@@ -368,17 +391,13 @@ def _build_perception_data(convo: AvatarConversation) -> str:
             if line_parts:
                 turn_lines.append("- " + "; ".join(line_parts))
         if turn_lines:
-            chunks.append(
-                "### Observaciones por turno (Raven-1)\n" + "\n".join(turn_lines)
-            )
+            chunks.append("### Observaciones por turno (Raven-1)\n" + "\n".join(turn_lines))
 
     if convo.perception_analysis:
         try:
             chunks.append(
                 "### Resumen perceptual final\n"
-                + json.dumps(
-                    convo.perception_analysis, ensure_ascii=False, indent=2
-                )
+                + json.dumps(convo.perception_analysis, ensure_ascii=False, indent=2)
             )
         except (TypeError, ValueError):
             chunks.append("### Resumen perceptual final\n" + str(convo.perception_analysis))
@@ -407,12 +426,7 @@ def _transcript_from_events(
             continue
         props = ev.get("properties") or {}
         role = props.get("role") or props.get("speaker") or "user"
-        content = (
-            props.get("speech")
-            or props.get("content")
-            or props.get("text")
-            or ""
-        )
+        content = props.get("speech") or props.get("content") or props.get("text") or ""
         if not isinstance(content, str) or not content.strip():
             continue
         item: dict[str, Any] = {"role": str(role), "content": content.strip()}
@@ -440,7 +454,7 @@ async def _poll_tavus_transcript(
         await asyncio.sleep(delay if attempt else 1.5)
         try:
             convo = await avatar.get_conversation(conversation_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception(
                 "polling Tavus conversation %s failed (attempt %d)",
                 conversation_id,
@@ -496,9 +510,7 @@ _PLACEHOLDER_SUMMARY = (
 )
 
 
-async def _create_placeholder_avatar_report(
-    db: DBSession, sess: SessionModel
-) -> None:
+async def _create_placeholder_avatar_report(db: DBSession, sess: SessionModel) -> None:
     """Generate a stub Report when Tavus' transcript never arrived.
 
     Idempotent: skips if a Report already exists for the session.
@@ -549,7 +561,7 @@ async def _create_placeholder_avatar_report(
         )
     )
     sess.status = SessionStatus.COMPLETED
-    sess.ended_at = datetime.now(timezone.utc)
+    sess.ended_at = datetime.now(UTC)
     await db.flush()
 
 
@@ -566,8 +578,16 @@ async def _evaluate_avatar_session(
     existing = (
         await db.execute(select(Report).where(Report.session_id == sess.id))
     ).scalar_one_or_none()
-    if existing:
-        return
+    if existing is not None:
+        # A placeholder report (created by avatar-end when no transcript was
+        # available yet) must NOT shadow the real evaluation once the Tavus
+        # webhook delivers the transcript. Replace the placeholder; keep any
+        # genuine report (idempotency for double webhook/avatar-end calls).
+        if existing.summary == _PLACEHOLDER_SUMMARY:
+            await db.delete(existing)
+            await db.flush()
+        else:
+            return
 
     transcript_text = await _normalize_avatar_transcript(convo.transcript)
     if not transcript_text:
@@ -618,7 +638,7 @@ async def _evaluate_avatar_session(
         )
     )
     sess.status = SessionStatus.COMPLETED
-    sess.ended_at = datetime.now(timezone.utc)
+    sess.ended_at = datetime.now(UTC)
     if convo.duration_seconds and not sess.duration_seconds:
         sess.duration_seconds = convo.duration_seconds
     await db.flush()

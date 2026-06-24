@@ -23,6 +23,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from textwrap import dedent
 
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -41,6 +42,111 @@ from oratoria.services.stt.whisper import WhisperSTT
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# ------------------------------ Deepgram token --------------------------------
+
+_DEEPGRAM_GRANT_URL = "https://api.deepgram.com/v1/auth/grant"
+_DEEPGRAM_GRANT_TTL = 30  # seconds — short enough to be single-use
+
+
+class DeepgramTokenResponse(BaseModel):
+    token: str
+    expires_in: int
+
+
+@router.post("/deepgram-token", response_model=DeepgramTokenResponse)
+async def get_deepgram_token(
+    user: User = Depends(current_active_user),  # noqa: ARG001 — enforces auth
+) -> DeepgramTokenResponse:
+    """Return a Deepgram credential the browser can use to open a streaming WS.
+
+    Token minting strategy (attempted in order):
+
+    1. **grant-token** — ``POST /v1/auth/grant`` → short-lived ``access_token``
+       (requires the key to have the ``grant-token`` scope; preferred).
+    2. **Management API temp key** — ``POST /v1/projects/{id}/keys`` with a
+       30-second TTL and ``usage:write`` scope (requires ``keys:write``).
+    3. **Direct key fallback** — if neither is available (e.g. a usage-only
+       key with no management scopes) the raw API key is returned directly.
+       The endpoint still acts as an auth gate (user JWT required), so the key
+       is only visible to authenticated sessions.  Replace the key with a
+       ``keys:write``-capable key in production to enable ephemeral tokens.
+    """
+    api_key = settings.deepgram_api_key
+    if not api_key or not api_key.get_secret_value():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "DEEPGRAM_API_KEY is not configured on the server.",
+        )
+
+    raw_key = api_key.get_secret_value()
+    headers = {"Authorization": f"Token {raw_key}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        # --- Attempt 1: grant-token ---
+        try:
+            resp = await client.post(
+                _DEEPGRAM_GRANT_URL,
+                headers=headers,
+                json={"ttl_seconds": _DEEPGRAM_GRANT_TTL},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info("Deepgram token minted via grant-token")
+                return DeepgramTokenResponse(
+                    token=data["access_token"],
+                    expires_in=data.get("expires_in", _DEEPGRAM_GRANT_TTL),
+                )
+            logger.debug(
+                "Deepgram grant-token returned %s — trying management API",
+                resp.status_code,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("Deepgram grant-token request failed: %s", exc)
+
+        # --- Attempt 2: Management API temp key ---
+        try:
+            projects_resp = await client.get(
+                "https://api.deepgram.com/v1/projects", headers=headers
+            )
+            if projects_resp.status_code == 200:
+                projects = projects_resp.json().get("projects", [])
+                if projects:
+                    project_id = projects[0]["project_id"]
+                    key_resp = await client.post(
+                        f"https://api.deepgram.com/v1/projects/{project_id}/keys",
+                        headers=headers,
+                        json={
+                            "comment": "OratorIA ephemeral browser key",
+                            "scopes": ["usage:write"],
+                            "time_to_live_in_seconds": _DEEPGRAM_GRANT_TTL,
+                        },
+                    )
+                    if key_resp.status_code in (200, 201):
+                        key_data = key_resp.json()
+                        logger.info("Deepgram token minted via management API temp key")
+                        return DeepgramTokenResponse(
+                            token=key_data["key"],
+                            expires_in=_DEEPGRAM_GRANT_TTL,
+                        )
+                    logger.debug(
+                        "Deepgram temp-key creation returned %s", key_resp.status_code
+                    )
+        except httpx.HTTPError as exc:
+            logger.warning("Deepgram management API request failed: %s", exc)
+
+        # --- Attempt 3: Direct key fallback ---
+        # The current key is usage-only (no grant-token or keys:write scope).
+        # We still expose it only to authenticated users.
+        logger.info(
+            "Deepgram ephemeral token unavailable; returning direct key "
+            "(authenticated endpoint — upgrade key scopes in production)"
+        )
+        return DeepgramTokenResponse(
+            token=raw_key,
+            expires_in=3600,  # session-level; not truly ephemeral
+        )
 
 
 # --------------------------------- Transcribe ---------------------------------

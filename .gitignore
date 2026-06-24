@@ -42,3 +42,7 @@ logs/
 # Local data
 *.sqlite
 *.db
+
+# AI assistant files (not part of the project)
+.claude/
+CLAUDE.md
