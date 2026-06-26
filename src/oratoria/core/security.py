@@ -16,7 +16,6 @@ from fastapi_users.authentication import (
     BearerTransport,
     JWTStrategy,
 )
-from fastapi_users.exceptions import InvalidPasswordException
 from fastapi_users.schemas import BaseUserCreate
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from jose import jwt
@@ -105,21 +104,13 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         password: str,
         user: User | BaseUserCreate,
     ) -> None:
-        """Enforce a minimum password policy at registration and reset.
+        """No password policy: accept anything.
 
-        fastapi-users calls this before hashing; raising rejects the request
-        with 400 REGISTER_INVALID_PASSWORD and the given reason.
+        Registration only fails if the account already exists (fastapi-users
+        returns 400 REGISTER_USER_ALREADY_EXISTS for that). Any non-empty
+        password is accepted here.
         """
-        if len(password) < 8:
-            raise InvalidPasswordException(reason="La contraseña debe tener al menos 8 caracteres.")
-        if len(password) > 128:
-            raise InvalidPasswordException(
-                reason="La contraseña es demasiado larga (máximo 128 caracteres)."
-            )
-        email = getattr(user, "email", "") or ""
-        local = email.split("@", 1)[0].lower()
-        if local and len(local) >= 3 and local in password.lower():
-            raise InvalidPasswordException(reason="La contraseña no puede contener tu correo.")
+        return None
 
     async def on_after_register(self, user: User, request: Request | None = None) -> None:
         logger.info("user.registered id=%s email=%s", user.id, user.email)
