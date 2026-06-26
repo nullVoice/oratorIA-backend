@@ -135,10 +135,19 @@ async def get_deepgram_token(
         except httpx.HTTPError as exc:
             logger.warning("Deepgram management API request failed: %s", exc)
 
-        # No ephemeral token could be minted. We deliberately do NOT fall back to
-        # returning the raw long-lived API key to the browser — that would leak a
-        # production credential to every authenticated client. The Deepgram key
-        # must have `grant-token` or `keys:write` scope in production.
+        # No ephemeral token could be minted. In non-production environments we
+        # fall back to handing the raw API key to the browser so local dev works
+        # with a member/usage key that lacks `grant-token`/`keys:write` scope.
+        if not settings.is_production:
+            logger.warning(
+                "Deepgram ephemeral token unavailable; returning raw key "
+                "(non-production fallback). Do NOT enable this in production."
+            )
+            return DeepgramTokenResponse(token=raw_key, expires_in=_DEEPGRAM_GRANT_TTL)
+
+        # In production we deliberately do NOT leak the raw long-lived API key to
+        # the browser. The Deepgram key must have `grant-token` or `keys:write`
+        # scope so an ephemeral token can be minted.
         logger.error(
             "Deepgram ephemeral token unavailable and raw-key fallback is "
             "disabled; grant the API key 'grant-token'/'keys:write' scope."
