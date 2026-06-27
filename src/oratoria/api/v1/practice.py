@@ -54,6 +54,9 @@ _DEEPGRAM_GRANT_TTL = 30  # seconds — short enough to be single-use
 class DeepgramTokenResponse(BaseModel):
     token: str
     expires_in: int
+    # WebSocket subprotocol the browser must use to authenticate this credential:
+    # "bearer" for a grant-token JWT, "token" for a raw/temp API key.
+    scheme: str = "token"
 
 
 @router.post("/deepgram-token", response_model=DeepgramTokenResponse)
@@ -98,6 +101,7 @@ async def get_deepgram_token(
                 return DeepgramTokenResponse(
                     token=data["access_token"],
                     expires_in=data.get("expires_in", _DEEPGRAM_GRANT_TTL),
+                    scheme="bearer",
                 )
             logger.debug(
                 "Deepgram grant-token returned %s — trying management API",
