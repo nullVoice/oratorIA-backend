@@ -31,11 +31,12 @@ class Report(Base):
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     strengths: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     improvements: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
-    paraverbal_metrics: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict
-    )
+    paraverbal_metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     next_steps: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    # Restructured "here's how you could have said it" pitch (headline + narrative
+    # sections + delivery note). Optional enhancement; null on older reports.
+    structured_pitch: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     pdf_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
-    session: Mapped["Session"] = relationship(back_populates="report")
+    session: Mapped[Session] = relationship(back_populates="report")

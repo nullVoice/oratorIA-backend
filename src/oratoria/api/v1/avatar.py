@@ -626,6 +626,9 @@ async def _evaluate_avatar_session(
             segments=convo.transcript or [],
         )
     )
+    structured_pitch = await try_generate_pitch(
+        transcript_text, sess.context or {}, evaluation.paraverbal_metrics
+    )
     db.add(
         Report(
             session_id=sess.id,
@@ -635,6 +638,7 @@ async def _evaluate_avatar_session(
             improvements=[i.model_dump() for i in evaluation.improvements],
             paraverbal_metrics=evaluation.paraverbal_metrics.model_dump(),
             next_steps=evaluation.next_steps,
+            structured_pitch=structured_pitch,
         )
     )
     sess.status = SessionStatus.COMPLETED
