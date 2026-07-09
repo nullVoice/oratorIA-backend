@@ -220,6 +220,10 @@ async def evaluate_session(
             paraverbal_metrics=evaluation.paraverbal_metrics.model_dump(),
             next_steps=evaluation.next_steps,
         )
+        # Best-effort restructured pitch (never raises — enhancement only).
+        report_row.structured_pitch = await try_generate_pitch(
+            stt_result.text, sess.context or {}, evaluation.paraverbal_metrics
+        )
         db.add(report_row)
 
         sess.status = SessionStatus.COMPLETED
@@ -342,6 +346,7 @@ async def get_session(
                 "improvements": sess.report.improvements,
                 "paraverbal_metrics": sess.report.paraverbal_metrics,
                 "next_steps": sess.report.next_steps,
+                "structured_pitch": sess.report.structured_pitch,
             }
             if sess.report
             else None

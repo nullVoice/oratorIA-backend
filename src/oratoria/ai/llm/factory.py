@@ -33,26 +33,21 @@ def get_llm(
     raise ValueError(f"Unknown LLM provider: {provider!r}")
 
 
-def get_evaluator_llm(
-    *, temperature: float = 0.3, max_tokens: int = 4096
-) -> BaseChatModel:
-    """LLM for the evaluator agent — Claude first, GPT-4o fallback.
+def get_evaluator_llm(*, temperature: float = 0.3, max_tokens: int = 4096) -> BaseChatModel:
+    """LLM for the evaluator / persona / pitch agents — OpenAI (GPT-4o) first.
 
-    Mirrors the strategy used by /api/v1/practice/finalize so the system
-    keeps working when only one provider key is configured.
+    OpenAI is the primary (and currently only) configured provider, so we use
+    it by default. Claude is only used as a fallback if an Anthropic key is
+    present. This keeps the system working with a single provider key.
     """
     from oratoria.config import settings
 
-    if _has_secret(settings.anthropic_api_key):
-        return build_claude(temperature=temperature, max_tokens=max_tokens)
     if _has_secret(settings.openai_api_key):
         return build_openai(temperature=temperature, max_tokens=max_tokens)
-    raise RuntimeError(
-        "No LLM provider configured: set ANTHROPIC_API_KEY or OPENAI_API_KEY."
-    )
+    if _has_secret(settings.anthropic_api_key):
+        return build_claude(temperature=temperature, max_tokens=max_tokens)
+    raise RuntimeError("No LLM provider configured: set OPENAI_API_KEY or ANTHROPIC_API_KEY.")
 
 
-def get_chat_model(
-    provider: ProviderName = "claude", **kwargs: object
-) -> BaseChatModel:
+def get_chat_model(provider: ProviderName = "claude", **kwargs: object) -> BaseChatModel:
     return get_llm(provider, **kwargs)  # type: ignore[arg-type]

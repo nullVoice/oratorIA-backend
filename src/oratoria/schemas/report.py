@@ -20,5 +20,6 @@ class ReportRead(BaseModel):
     improvements: list[dict[str, Any]]
     paraverbal_metrics: dict[str, Any]
     next_steps: list[str]
+    structured_pitch: dict[str, Any] | None = None
     pdf_url: str | None
     created_at: datetime
