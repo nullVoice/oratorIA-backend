@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession as DBSession
 from sqlalchemy.orm import selectinload
 
 from oratoria.ai.agents.evaluator import EvaluatorAgent
+from oratoria.ai.agents.pitch import try_generate_pitch
 from oratoria.core.security import current_active_user
 from oratoria.dependencies import get_db
 from oratoria.models import Report, Transcript

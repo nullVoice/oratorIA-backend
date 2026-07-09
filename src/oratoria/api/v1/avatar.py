@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession as DBSession
 
 from oratoria.ai.agents.evaluator import EvaluatorAgent
+from oratoria.ai.agents.pitch import try_generate_pitch
 from oratoria.ai.parsers.feedback_schema import ParaverbalMetrics
 from oratoria.ai.prompts.audience_prompt import (
     build_audience_context,
